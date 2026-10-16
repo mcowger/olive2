@@ -61,8 +61,12 @@ interface MeetingsResponse {
     limit: number;
     offset: number;
     total: number;
+    hasMore?: boolean;
+    nextOffset?: number | null;
   };
 }
+
+const MEETINGS_PAGE_SIZE = 100;
 
 type MeetingDetailResponse = MeetingDetailAggregate;
 
@@ -1005,42 +1009,141 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const [meetings, setMeetings] = useState<MeetingListItem[]>([]);
   const [activeProgressMap, setActiveProgressMap] = useState<Record<string, TranscriptionProgressUpdate>>({});
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const meetingsRequestId = useRef(0);
+  const meetingsRef = useRef<MeetingListItem[]>([]);
+  const debouncedSearchRef = useRef("");
+  const paginationRef = useRef<{ hasMore: boolean; nextOffset: number | null }>({ hasMore: false, nextOffset: null });
+
+  useEffect(() => {
+    meetingsRef.current = meetings;
+  }, [meetings]);
+  useEffect(() => {
+    debouncedSearchRef.current = debouncedSearch;
+  }, [debouncedSearch]);
+  useEffect(() => {
+    paginationRef.current = { hasMore, nextOffset };
+  }, [hasMore, nextOffset]);
+
+  const buildMeetingsUrl = (query: string, offset: number) => {
+    const params = new URLSearchParams({
+      limit: String(MEETINGS_PAGE_SIZE),
+      offset: String(offset),
+    });
+    const q = query.trim();
+    if (q) params.set("search", q);
+    return `/api/meetings?${params.toString()}`;
+  };
+
+  const applyPage = (data: MeetingsResponse, mode: "reset" | "append") => {
+    const incoming = data.meetings || [];
+    const pagination = data.pagination;
+    const totalCount = pagination ? pagination.total : incoming.length;
+    if (mode === "reset") {
+      setMeetings(incoming);
+      setTotal(totalCount);
+      const more = pagination?.hasMore ?? incoming.length < totalCount;
+      setHasMore(more);
+      setNextOffset(pagination?.nextOffset ?? (more ? incoming.length : null));
+    } else {
+      const seen = new Set(meetingsRef.current.map((m) => m.id));
+      const deduped = incoming.filter((m) => !seen.has(m.id));
+      const merged = [...meetingsRef.current, ...deduped];
+      setMeetings(merged);
+      setTotal(totalCount);
+      const more = pagination?.hasMore ?? merged.length < totalCount;
+      setHasMore(more);
+      setNextOffset(pagination?.nextOffset ?? (more ? merged.length : null));
+    }
+  };
 
   const fetchMeetings = async (opts?: { silent?: boolean }) => {
-    if (!opts?.silent && meetings.length === 0) {
+    const requestId = ++meetingsRequestId.current;
+    if (!opts?.silent) {
       setLoading(true);
     }
+    setLoadingMore(false);
     setError(null);
     try {
-      const url = search.trim() ? `/api/meetings?search=${encodeURIComponent(search.trim())}` : "/api/meetings";
+      const query = debouncedSearchRef.current;
       const [res, activeRes] = await Promise.all([
-        fetch(url),
+        fetch(buildMeetingsUrl(query, 0)),
         fetch("/api/transcriptions/active").catch(() => null)
       ]);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as MeetingsResponse;
-      setMeetings(data.meetings);
+      if (requestId !== meetingsRequestId.current) return;
+      applyPage(data, "reset");
       if (activeRes && activeRes.ok) {
         const activeData = await activeRes.json();
         setActiveProgressMap(activeData.active || {});
       }
     } catch (err) {
+      if (requestId !== meetingsRequestId.current) return;
       setError(err instanceof Error ? err.message : "Failed to load meetings");
     } finally {
-      setLoading(false);
+      if (requestId === meetingsRequestId.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const loadMore = async () => {
+    if (loadingMore || loading || !paginationRef.current.hasMore) return;
+    const offset = paginationRef.current.nextOffset ?? meetingsRef.current.length;
+    if (offset == null) return;
+    const requestId = ++meetingsRequestId.current;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(buildMeetingsUrl(debouncedSearchRef.current, offset));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as MeetingsResponse;
+      if (requestId !== meetingsRequestId.current) return;
+      applyPage(data, "append");
+    } catch (err) {
+      if (requestId !== meetingsRequestId.current) return;
+      setError(err instanceof Error ? err.message : "Failed to load more meetings");
+    } finally {
+      if (requestId === meetingsRequestId.current) {
+        setLoadingMore(false);
+      }
     }
   };
 
   useEffect(() => {
-    void fetchMeetings();
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
   }, [search]);
+
+  useEffect(() => {
+    void fetchMeetings();
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    if (!hasMore || loading || loadingMore) return;
+    const el = loadMoreSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "600px 0px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, loading, loadingMore, nextOffset, debouncedSearch, meetings.length]);
 
   const toggleSelectMeeting = (id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
@@ -1070,6 +1173,11 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
         throw new Error(data.error || `Failed to delete meeting (HTTP ${res.status})`);
       }
       setMeetings((prev) => prev.filter((m) => m.id !== id));
+      setTotal((t) => Math.max(0, t - 1));
+      setSelectedIds((prev) => prev.filter((sid) => sid !== id));
+      if (paginationRef.current.hasMore) {
+        setNextOffset(Math.max(0, meetingsRef.current.length - 1));
+      }
       setActiveProgressMap((prev) => {
         if (!(id in prev)) return prev;
         const next = { ...prev };
@@ -1081,7 +1189,9 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
     }
   };
 
-  // Poll active transcriptions every 2.5s if any meeting is processing
+  // Poll active transcriptions every 2.5s if any meeting is processing.
+  // Refresh the first page and merge into the loaded list so infinite
+  // scroll position is preserved (the backend caps pages at 100).
   useEffect(() => {
     const hasProcessing = meetings.some((m) => m.status === "processing") || Object.keys(activeProgressMap).length > 0;
     if (!hasProcessing) return;
@@ -1090,21 +1200,36 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
       try {
         const [activeRes, meetingsRes] = await Promise.all([
           fetch("/api/transcriptions/active"),
-          fetch("/api/meetings")
+          fetch(buildMeetingsUrl(debouncedSearchRef.current, 0))
         ]);
         if (activeRes.ok) {
           const activeData = await activeRes.json();
           setActiveProgressMap(activeData.active || {});
         }
         if (meetingsRes.ok) {
-          const mData = await meetingsRes.json();
-          setMeetings(mData.meetings || []);
+          const mData = (await meetingsRes.json()) as MeetingsResponse;
+          const fresh = mData.meetings || [];
+          const freshTotal = mData.pagination ? mData.pagination.total : fresh.length;
+          const prev = meetingsRef.current;
+          if (prev.length === 0) {
+            applyPage(mData, "reset");
+          } else {
+            const freshById = new Map(fresh.map((m) => [m.id, m]));
+            const prevIds = new Set(prev.map((m) => m.id));
+            const newcomers = fresh.filter((m) => !prevIds.has(m.id));
+            const combined = [...newcomers, ...prev.map((m) => freshById.get(m.id) ?? m)];
+            setMeetings(combined);
+            setTotal(freshTotal);
+            const more = combined.length < freshTotal;
+            setHasMore(more);
+            setNextOffset(more ? combined.length : null);
+          }
         }
       } catch {}
     }, 2500);
 
     return () => clearInterval(interval);
-  }, [meetings, activeProgressMap]);
+  }, [meetings, activeProgressMap, debouncedSearch]);
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -1314,6 +1439,28 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               </div>
             );
           })}
+        </div>
+      )}
+
+      {!loading && !error && meetings.length > 0 && (
+        <div className="flex flex-col items-center gap-3 pt-1">
+          <p className="text-xs text-stone-500" aria-live="polite">
+            Showing {meetings.length} of {total} meeting{total === 1 ? "" : "s"}
+          </p>
+          {hasMore && !loadingMore && (
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              className="min-h-[44px] rounded-lg border border-stone-700 px-6 py-2 text-sm font-semibold text-stone-200 transition hover:border-lime-400/60 hover:text-lime-300"
+            >
+              Load more
+            </button>
+          )}
+          {loadingMore && <p className="text-xs text-stone-500">Loading more meetings…</p>}
+          {!hasMore && total > 0 && (
+            <p className="text-xs text-stone-600">You&apos;ve reached the end of the list.</p>
+          )}
+          <div ref={loadMoreSentinelRef} aria-hidden="true" className="h-1 w-full" />
         </div>
       )}
 

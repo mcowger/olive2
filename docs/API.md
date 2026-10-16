@@ -68,6 +68,9 @@ Returns HTTP 200 with:
 
 Returns HTTP 200 with a stable envelope. `meetings` is always an array, including when the
 database is empty. `limit` defaults to `50` and is capped at `100`; `offset` defaults to `0`.
+Results are newest-first. Every response includes
+`pagination: { limit, offset, total, hasMore, nextOffset }` — while `hasMore`
+is true, fetch the next page with `offset=nextOffset` until all results are loaded.
 
 * `tags`: exact tag match (case-insensitive), repeatable (`?tags=acme&tags=q3`, AND semantics)
   or comma-separated (`?tags=acme,q3`). Unlike `search`, never matches transcript text —
@@ -110,7 +113,9 @@ Returns distinct meeting tags with meeting counts, sorted alphabetically:
   "pagination": {
     "limit": 50,
     "offset": 0,
-    "total": 1
+    "total": 1,
+    "hasMore": false,
+    "nextOffset": null
   }
 }
 ```
@@ -122,6 +127,10 @@ Provides Olive's Model Context Protocol endpoint on the same port as the HTTP AP
 `list_meetings` accepts `search` plus the meeting filters: `tags` (exact,
 AND-combined), `source`, `status`, `speakerId`, `hasSummary`,
 `hasTranscript`, `startTime`, `endTime`, plus `limit` / `offset`.
+All three paginated tools (`list_meetings`, `search_transcripts`,
+`get_action_items`) return `pagination: { limit, offset, total, hasMore,
+nextOffset }` — while `hasMore` is true, call again with
+`offset=nextOffset` until everything is retrieved.
 `search_transcripts` takes `query` (the transcript text to find) plus the same
 filters *except* `search`, and `get_action_items` takes the same filters
 *except* `search` — one free-text field per tool, so agents never have to

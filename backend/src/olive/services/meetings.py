@@ -354,12 +354,17 @@ def list_meetings(
         )
         items.append(to_meeting(r, audio_status, can_retry).model_dump())
 
+    total_int = int(total or 0)
+    end = offset + len(items)
+    has_more = end < total_int
     return {
         "meetings": items,
         "pagination": {
             "limit": limit,
             "offset": offset,
-            "total": int(total or 0),
+            "total": total_int,
+            "hasMore": has_more,
+            "nextOffset": end if has_more else None,
         },
     }
 

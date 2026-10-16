@@ -26,7 +26,7 @@ def test_serves_health_and_lists_meetings() -> None:
     assert empty_res.status_code == 200
     assert empty_res.json() == {
         "meetings": [],
-        "pagination": {"limit": 50, "offset": 0, "total": 0},
+        "pagination": {"limit": 50, "offset": 0, "total": 0, "hasMore": False, "nextOffset": None},
     }
 
     now = int(time.time() * 1000)
@@ -95,7 +95,7 @@ def test_serves_health_and_lists_meetings() -> None:
                 "canRetryAudio": False,
             }
         ],
-        "pagination": {"limit": 50, "offset": 0, "total": 1},
+        "pagination": {"limit": 50, "offset": 0, "total": 1, "hasMore": False, "nextOffset": None},
     }
 
     search_match = client.get("/api/meetings?search=fixture")

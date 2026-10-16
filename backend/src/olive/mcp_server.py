@@ -153,8 +153,17 @@ _MEETING_FILTER_PROPERTIES: dict[str, Any] = {
     "hasTranscript": {"type": "boolean", "description": "Only meetings with/without a transcript"},
     "startTime": {"type": "number"},
     "endTime": {"type": "number"},
-    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-    "offset": {"type": "integer", "minimum": 0},
+    "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Page size (default 50, max 100). Results are newest-first.",
+    },
+    "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Items to skip. Use pagination.nextOffset while pagination.hasMore is true to page through all results.",
+    },
 }
 
 
@@ -165,6 +174,23 @@ _MEETING_FILTER_PROPERTIES: dict[str, Any] = {
 _MEETING_FILTER_PROPERTIES_NO_SEARCH: dict[str, Any] = {
     k: v for k, v in _MEETING_FILTER_PROPERTIES.items() if k != "search"
 }
+
+
+def _pagination_hints(limit: int, offset: int, total: int) -> dict[str, Any]:
+    """Build a pagination envelope with follow-up hints.
+
+    ``hasMore``/``nextOffset`` tell REST and MCP clients exactly how to
+    fetch the next page (``offset=nextOffset`` while ``hasMore`` is true).
+    """
+    end = offset + min(max(limit, 0), max(total - offset, 0))
+    has_more = end < total
+    return {
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+        "hasMore": has_more,
+        "nextOffset": end if has_more else None,
+    }
 
 
 def _meeting_filter_args(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -186,7 +212,12 @@ def _meeting_filter_args(arguments: dict[str, Any]) -> dict[str, Any]:
 MCP_TOOLS_SPEC: list[dict[str, Any]] = [
     {
         "name": "list_meetings",
-        "description": "List Olive meetings with optional text, tag, speaker, status, and date filters.",
+        "description": (
+            "List Olive meetings (newest-first) with optional text, tag, speaker, status, and date filters. "
+            "Paginated: limit defaults to 50 (max 100); response includes "
+            "pagination { limit, offset, total, hasMore, nextOffset }. "
+            "When hasMore is true, call again with offset=nextOffset until all results are retrieved."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": _MEETING_FILTER_PROPERTIES,
@@ -210,7 +241,12 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
     },
     {
         "name": "search_transcripts",
-        "description": "Search transcript text across Olive meetings and return matching snippets.",
+        "description": (
+            "Search transcript text across Olive meetings and return matching snippets. "
+            "Paginated: limit defaults to 50; response includes "
+            "pagination { limit, offset, total, hasMore, nextOffset }. "
+            "When hasMore is true, call again with offset=nextOffset."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["query"],
@@ -222,7 +258,12 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
     },
     {
         "name": "get_action_items",
-        "description": "Extract checklist-style action items from Olive meeting summaries.",
+        "description": (
+            "Extract checklist-style action items from Olive meeting summaries. "
+            "Paginated: limit defaults to 50; response includes "
+            "pagination { limit, offset, total, hasMore, nextOffset }. "
+            "When hasMore is true, call again with offset=nextOffset."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1545,7 +1586,7 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
             return _text_result(
                 {
                     "matches": matches[offset : offset + limit],
-                    "pagination": {"limit": limit, "offset": offset, "total": len(matches)},
+                    "pagination": _pagination_hints(limit, offset, len(matches)),
                 }
             )
 
@@ -1580,7 +1621,7 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
             return _text_result(
                 {
                     "actionItems": action_items[offset : offset + limit],
-                    "pagination": {"limit": limit, "offset": offset, "total": len(action_items)},
+                    "pagination": _pagination_hints(limit, offset, len(action_items)),
                 }
             )
 

@@ -8,6 +8,12 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-16]
+
+### Fixed
+
+- **Meetings list pagination** — the meetings page no longer dead-ends at the newest 50: it loads 100 at a time with infinite scroll (plus a Load more button and a "Showing X of Y" count), so large archives are fully browsable and searchable. `GET /api/meetings` and the MCP `list_meetings` / `search_transcripts` / `get_action_items` tools now return `pagination: { limit, offset, total, hasMore, nextOffset }` — follow `offset=nextOffset` while `hasMore` is true to page through everything.
+
 ## [2026-10-15]
 
 <!-- Add new entries under today's date heading (newest date first) under Added / Changed / Fixed. See AGENTS.md "Changelog policy". -->
