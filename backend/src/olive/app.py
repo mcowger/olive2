@@ -605,6 +605,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         auto_transcribe_param = form.get("autoTranscribe")
         provider_param = form.get("provider")
         model_id_param = form.get("modelId")
+        duration_ms_param = form.get("durationMs")
+        if duration_ms_param is None:
+            duration_ms_param = form.get("duration_ms")
+        duration_param = form.get("duration")
 
         user_agent = request.headers.get("user-agent") or ""
         is_shortcut = ("Shortcuts" in user_agent) or (source_param == "ios-shortcut")
@@ -635,6 +639,16 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "autoTranscribe": auto_transcribe,
                     "transcriptionProvider": transcription_provider,
                     "modelId": model_id,
+                    "durationMs": (
+                        str(duration_ms_param)
+                        if duration_ms_param is not None and not hasattr(duration_ms_param, "read")
+                        else None
+                    ),
+                    "duration": (
+                        str(duration_param)
+                        if duration_param is not None and not hasattr(duration_param, "read")
+                        else None
+                    ),
                 },
             )
             return JSONResponse(result, status_code=200 if result.get("deduped") else 201)

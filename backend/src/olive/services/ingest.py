@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
+import io
+import math
 import re
+import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Callable
@@ -47,6 +52,85 @@ EXT_TO_MIME: dict[str, str] = {
     "flac": "audio/flac",
     "webm": "audio/webm",
 }
+
+
+def parse_duration_ms_value(value: Any) -> int | None:
+    """Parse an explicit millisecond duration field (``durationMs``/``duration_ms``)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    return int(round(parsed))
+
+
+def parse_duration_seconds_or_ms(value: Any) -> int | None:
+    """Parse a bare ``duration`` field that may be seconds or milliseconds.
+
+    Values below 1000 are treated as seconds (Plaud Cloud reports durations
+    in seconds); larger values are treated as milliseconds already.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    if parsed < 1000:
+        return int(round(parsed * 1000))
+    return int(round(parsed))
+
+
+def probe_audio_duration_ms_sync(audio_bytes: bytes, extension: str = "m4a") -> int | None:
+    """Best-effort server-side audio duration probe. Never raises; returns None on failure."""
+    if not audio_bytes:
+        return None
+    # Fast path for WAV: read the header without spawning a subprocess.
+    try:
+        if len(audio_bytes) >= 12 and audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+            import soundfile as sf
+
+            info = sf.info(io.BytesIO(audio_bytes))
+            if info.samplerate and info.frames:
+                duration_ms = int(round(info.frames / float(info.samplerate) * 1000))
+                return duration_ms if duration_ms > 0 else None
+    except Exception:
+        pass
+    suffix = f".{(extension or 'm4a').lower().lstrip('.') or 'm4a'}"
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            proc = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    tmp.name,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        if proc.returncode != 0:
+            return None
+        seconds = float((proc.stdout or "").strip())
+        if not math.isfinite(seconds) or seconds <= 0:
+            return None
+        duration_ms = int(round(seconds * 1000))
+        return duration_ms if duration_ms > 0 else None
+    except Exception:
+        return None
 
 
 def resolve_extension_and_mime(
@@ -161,9 +245,25 @@ class IngestService:
         meeting_id = str(uuid.uuid4())
         recording_id = str(uuid.uuid4())
         source = options.get("source") or "upload"
-        duration_ms = (
-            options.get("durationMs") if options.get("durationMs") is not None else options.get("duration_ms")
-        )
+        duration_ms: int | None = None
+        for key in ("durationMs", "duration_ms"):
+            duration_ms = parse_duration_ms_value(options.get(key))
+            if duration_ms is not None:
+                break
+        if duration_ms is None:
+            duration_ms = parse_duration_seconds_or_ms(options.get("duration"))
+        if duration_ms is None:
+            # The client doesn't always know the duration (iOS Shortcut,
+            # curl, web upload), so probe the audio server-side instead of
+            # storing a zero-length meeting.
+            try:
+                duration_ms = await asyncio.to_thread(probe_audio_duration_ms_sync, audio_bytes, extension)
+            except Exception as exc:
+                self.logger.warn(
+                    "Audio duration probe failed; storing meeting without duration",
+                    {"category": "ingest", "error": str(exc)},
+                )
+                duration_ms = None
         end_time = start_time + int(duration_ms or 0)
 
         raw_title = (options.get("title") or "").strip()
