@@ -197,7 +197,6 @@ class TitleService:
                 "model": model,
                 "systemPrompt": AUTO_TITLE_SYSTEM_PROMPT,
                 "prompt": user_prompt,
-                "temperature": 0.3,
             },
         )
         title = sanitize_generated_title(llm_result.text)

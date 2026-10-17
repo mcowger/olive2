@@ -423,8 +423,7 @@ Executes a prompt generation using `pi-ai`:
   "provider": "google",
   "model": "gemini-2.5-flash",
   "systemPrompt": "You are a concise executive assistant.",
-  "prompt": "Summarize the key points: ...",
-  "temperature": 0.3
+  "prompt": "Summarize the key points: ..."
 }
 ```
 
