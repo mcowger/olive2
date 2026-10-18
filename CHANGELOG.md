@@ -8,6 +8,12 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-18]
+
+### Fixed
+
+- **A stuck transcription stage no longer stalls the whole queue.** If a local-transcription stage stops making progress for `OLIVE_STAGE_STALL_TIMEOUT_SEC` (default 900s) it is treated as wedged and cancelled, freeing its worker slot so the rest of the backlog keeps draining instead of stalling behind it. Jobs that are simply waiting their turn in the queue are never cancelled. Pipeline model sessions are now also released promptly when a transcription finishes, so their threads no longer accumulate across a large backlog.
+
 ## [2026-10-16]
 
 ### Changed
