@@ -355,9 +355,10 @@ async def test_post_transcribe_background_returns_202_and_streams_progress(
             debug_res = await client.get("/api/debug/queues")
             assert debug_res.status_code == 200
             debug_data = debug_res.json()
-            assert debug_data["summary"]["totalQueues"] == 11
+            assert debug_data["summary"]["totalQueues"] == 12
             queue_names = [q["name"] for q in debug_data["queues"]]
             assert queue_names == [
+                "transcribe_driver",
                 "pipeline",
                 "plaud_sync",
                 "ffmpeg",

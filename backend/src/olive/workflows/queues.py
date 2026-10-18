@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# The local-transcription driver (run_transcription_driver) runs here, NOT on
+# QUEUE_PIPELINE. The driver enqueues its child local_transcription_workflow onto
+# QUEUE_PIPELINE and then awaits it; if the driver shared that 2-slot queue, two
+# concurrent drivers would hold both slots while their children sat un-schedulable —
+# a deadlock that stalled the whole backlog. Keeping the driver on its own queue lets
+# QUEUE_PIPELINE bound the actual concurrent-meeting work (2) without being starved by
+# waiting drivers.
+QUEUE_DRIVER = "transcribe_driver"
 QUEUE_PIPELINE = "pipeline"
 QUEUE_PLAUD_SYNC = "plaud_sync"
 QUEUE_FFMPEG = "ffmpeg"
@@ -25,6 +33,9 @@ class StageQueueSpec:
 
 
 STAGE_QUEUE_SPECS: tuple[StageQueueSpec, ...] = (
+    # Driver concurrency only needs to exceed QUEUE_PIPELINE's so the pipeline is kept
+    # fed; drivers mostly just await their child, so this is cheap.
+    StageQueueSpec(name=QUEUE_DRIVER, worker_concurrency=8),
     StageQueueSpec(name=QUEUE_PIPELINE, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_PLAUD_SYNC, worker_concurrency=1),
     StageQueueSpec(name=QUEUE_FFMPEG, worker_concurrency=2),
@@ -43,6 +54,7 @@ __all__ = [
     "QUEUE_ASSEMBLYAI",
     "QUEUE_MUSE",
     "QUEUE_ASR",
+    "QUEUE_DRIVER",
     "QUEUE_DIARIZE",
     "QUEUE_FFMPEG",
     "QUEUE_PIPELINE",

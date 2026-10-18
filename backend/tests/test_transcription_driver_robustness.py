@@ -244,3 +244,26 @@ async def test_run_staged_does_not_cancel_while_queued(monkeypatch: pytest.Monke
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+# --- Primary fix: the local driver must not share the pipeline queue (deadlock) -----
+
+
+def test_local_driver_queue_is_not_the_pipeline_queue() -> None:
+    # The local-transcription DRIVER (run_transcription_driver) awaits its child
+    # local_transcription_workflow, which runs on QUEUE_PIPELINE. If the driver also
+    # ran on QUEUE_PIPELINE, two concurrent drivers would hold both of its 2 slots
+    # while their children sat un-schedulable — the deadlock that stalled the backlog.
+    from olive.services.transcription import PROVIDER_LOCAL, TRANSCRIBE_QUEUE_BY_PROVIDER
+    from olive.workflows.queues import QUEUE_PIPELINE
+
+    assert TRANSCRIBE_QUEUE_BY_PROVIDER[PROVIDER_LOCAL] != QUEUE_PIPELINE
+
+
+def test_driver_queue_registered_and_outsizes_pipeline() -> None:
+    from olive.workflows.queues import QUEUE_DRIVER, QUEUE_PIPELINE, STAGE_QUEUE_SPECS
+
+    specs = {s.name: s.worker_concurrency for s in STAGE_QUEUE_SPECS}
+    assert QUEUE_DRIVER in specs, "driver queue must be registered so DBOS creates it"
+    # driver concurrency must exceed the pipeline's so the pipeline is never starved
+    assert specs[QUEUE_DRIVER] > specs[QUEUE_PIPELINE]

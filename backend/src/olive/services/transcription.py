@@ -50,8 +50,8 @@ from ..schemas import (
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
+    QUEUE_DRIVER,
     QUEUE_MUSE,
-    QUEUE_PIPELINE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
     QUEUE_SPEECHMATICS,
@@ -78,7 +78,10 @@ TranscriptionProviderName = Literal["speechmatics", "assemblyai", "muse", "local
 # Durable-queue routing for background transcription work (see AGENTS.md:
 # the DBOS job queue is the SOLE acceptable path for enqueuing work).
 TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {
-    PROVIDER_LOCAL: QUEUE_PIPELINE,
+    # local driver runs on QUEUE_DRIVER, not QUEUE_PIPELINE: the driver awaits its
+    # child local_transcription_workflow (which runs on QUEUE_PIPELINE), so sharing
+    # that 2-slot queue deadlocks at >=2 concurrent meetings. See QUEUE_DRIVER note.
+    PROVIDER_LOCAL: QUEUE_DRIVER,
     PROVIDER_SPEECHMATICS: QUEUE_SPEECHMATICS,
     PROVIDER_ASSEMBLYAI: QUEUE_ASSEMBLYAI,
     PROVIDER_MUSE: QUEUE_MUSE,

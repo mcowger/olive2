@@ -12,7 +12,7 @@ every section newer than the previous tag into the GitHub release notes.
 
 ### Fixed
 
-- **A stuck transcription stage no longer stalls the whole queue.** If a local-transcription stage stops making progress for `OLIVE_STAGE_STALL_TIMEOUT_SEC` (default 900s) it is treated as wedged and cancelled, freeing its worker slot so the rest of the backlog keeps draining instead of stalling behind it. Jobs that are simply waiting their turn in the queue are never cancelled. Pipeline model sessions are now also released promptly when a transcription finishes, so their threads no longer accumulate across a large backlog.
+- **Large local-transcription backlogs no longer deadlock.** The local transcription driver now runs on its own queue instead of sharing the 2-slot `pipeline` queue with the child workflow it waits on. Previously, two or more concurrent local transcriptions would occupy both pipeline slots while their child workflows waited for a slot that never freed — deadlocking the whole backlog (seen in the wild as a run stuck for hours with a runaway thread count). A stalled stage is additionally cancelled after `OLIVE_STAGE_STALL_TIMEOUT_SEC` (default 900s) with no progress (jobs merely waiting their turn are never cancelled), and pipeline model sessions are released promptly on completion so their threads don't accumulate across a large backlog.
 
 ## [2026-10-16]
 
