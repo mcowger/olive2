@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
+import os
 import sqlite3
 import tempfile
 import time
@@ -74,6 +76,7 @@ class TaskExecutionContext:
     signal: Any = None
     on_progress: Callable[[dict[str, Any]], Any] | None = None
     pipeline: LocalTranscriptionPipeline | None = None
+    owns_pipeline: bool = False  # True when _get_pipeline created it (so we close it on unregister)
     pipeline_options: dict[str, Any] | None = None
     audio_bytes: bytes | None = None
     db: Engine | None = None
@@ -91,7 +94,33 @@ def register_task_context(ctx: TaskExecutionContext) -> None:
 
 
 def unregister_task_context(task_id: str) -> None:
+    # Drop the registry entry only. We deliberately do NOT close the pipeline here:
+    # unregister runs in a finally that also fires on forced cancel/stall, where a
+    # wedged native stage call may still be executing — closing its session then
+    # would be a use-after-free. Pipeline teardown happens via _close_owned_pipeline
+    # on the COMPLETION path, where the work is known to be finished.
     _TASK_CONTEXTS.pop(task_id, None)
+
+
+def _close_owned_pipeline(task_id: str) -> None:
+    """Release the task's pipeline engines once its workflow has COMPLETED.
+
+    Frees the ONNX/torch thread pools deterministically instead of leaving them for
+    GC. Safe only after completion — the stages have returned, so no thread is still
+    inside a session. Only closes pipelines we created (``owns_pipeline``); a
+    caller-injected pipeline is the caller's to manage.
+    """
+    ctx = _TASK_CONTEXTS.get(task_id)
+    if ctx is None or not ctx.owns_pipeline or ctx.pipeline is None:
+        return
+    try:
+        ctx.pipeline.close()
+    except Exception as exc:
+        logger.warn(
+            "pipeline.close() after completion failed",
+            {"category": "transcription", "taskId": task_id, "error": str(exc)},
+        )
+    ctx.pipeline = None
 
 
 def get_task_context(task_id: str) -> TaskExecutionContext | None:
@@ -184,7 +213,84 @@ def _get_pipeline(task_id: str, pipeline_options: dict[str, Any] | None) -> Loca
     pipe = LocalTranscriptionPipeline(pipeline_options)
     if ctx is not None:
         ctx.pipeline = pipe
+        ctx.owns_pipeline = True  # we created it → unregister_task_context closes it
     return pipe
+
+
+_DEFAULT_STALL_TIMEOUT_SEC = 900.0  # 15 min with no progress = a wedged stage
+
+
+def _resolve_stall_timeout(options: dict[str, Any] | None) -> float:
+    """Seconds of silence *during an active stage* before it is treated as wedged.
+
+    Precedence: explicit ``stallTimeoutSec`` option > ``OLIVE_STAGE_STALL_TIMEOUT_SEC``
+    env > default. Non-finite / non-positive values are rejected (a misconfig must not
+    disable the guard or make it trip instantly); the env/default are additionally
+    floored at 60s.
+    """
+    if options is not None:
+        raw = options.get("stallTimeoutSec", options.get("stall_timeout_sec"))
+        if raw is not None:
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                val = math.nan
+            if math.isfinite(val) and val > 0:
+                return val
+    try:
+        env_val = float(os.environ.get("OLIVE_STAGE_STALL_TIMEOUT_SEC", str(_DEFAULT_STALL_TIMEOUT_SEC)))
+    except ValueError:
+        env_val = _DEFAULT_STALL_TIMEOUT_SEC
+    if not math.isfinite(env_val) or env_val <= 0:
+        env_val = _DEFAULT_STALL_TIMEOUT_SEC
+    return max(60.0, env_val)
+
+
+class _ProgressStallWatch:
+    """Fires ``event`` when an ACTIVE stage emits no progress for ``timeout`` seconds.
+
+    Guards the queue against a stage that hangs and pins a worker-concurrency slot
+    forever (the incident where one stuck driver stalled the whole backlog for 14h).
+
+    Only genuine stage progress counts. A job parked in the DBOS queue (or between
+    stages, waiting in a sub-queue) emits ``"queued"`` markers, which call
+    :meth:`waiting` and PAUSE enforcement — so a long backlog is never mistaken for a
+    wedge. The clock runs only while a real stage is executing, where sub-progress is
+    emitted frequently; silence that long during active work means the stage is stuck.
+    """
+
+    def __init__(self, timeout: float) -> None:
+        self.timeout = timeout
+        self.event = asyncio.Event()
+        self._last = time.monotonic()
+        self._active = False
+        self._task: asyncio.Task[None] | None = None
+
+    def progress(self) -> None:
+        """A real stage made progress — (re)arm and reset the clock."""
+        self._active = True
+        self._last = time.monotonic()
+
+    def waiting(self) -> None:
+        """Job is queued / between stages — pause enforcement (not a stall)."""
+        self._active = False
+
+    async def _run(self) -> None:
+        interval = min(5.0, max(0.05, self.timeout / 10.0))
+        while not self.event.is_set():
+            await asyncio.sleep(interval)
+            if self._active and (time.monotonic() - self._last) > self.timeout:
+                self.event.set()
+                return
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(self._run())
+
+    def cancel(self) -> None:
+        self.event.set()
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
 
 
 def _update_stage_run(
@@ -1108,6 +1214,8 @@ async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any
             )
             if inspect.isawaitable(comp_res):
                 await comp_res
+        # Pipeline work is done (all stages returned) — release sessions now.
+        _close_owned_pipeline(task_id)
         return res_dict
     finally:
         if adopted:
@@ -1458,6 +1566,26 @@ async def run_staged_local_transcription(
     )
     register_task_context(ctx)
 
+    # Stall guard: if a running stage stops emitting progress for the stall window
+    # it has wedged — cancel it so its worker-concurrency slot frees instead of
+    # blocking the whole queue. Every progress event stamps the watch; enforcement
+    # begins only after the first stamp (a job still queued emits nothing yet).
+    stall = _ProgressStallWatch(_resolve_stall_timeout(options))
+    _caller_on_progress = ctx.on_progress
+
+    def _stamped_on_progress(update: dict[str, Any]) -> Any:
+        # "queued" markers (pre-enqueue + between-stage sub-queue waits) are NOT
+        # progress — they pause the guard so a backlog is never mistaken for a wedge.
+        if update.get("stage") == "queued":
+            stall.waiting()
+        else:
+            stall.progress()
+        if callable(_caller_on_progress):
+            return _caller_on_progress(update)
+        return None
+
+    ctx.on_progress = _stamped_on_progress
+
     raw_enrolled = options.get("enrolledSpeakers") or options.get("enrolled_speakers") or []
     serialized_enrolled = [s.model_dump() if isinstance(s, EnrolledSpeaker) else s for s in raw_enrolled]
 
@@ -1509,9 +1637,11 @@ async def run_staged_local_transcription(
 
         result_task = asyncio.create_task(wf_handle.get_result(polling_interval_sec=0.05))
         abort_wait_task = asyncio.create_task(abort_Event.wait())
+        stall.start()
+        stall_wait_task = asyncio.create_task(stall.event.wait())
 
         done, _ = await asyncio.wait(
-            {result_task, abort_wait_task},
+            {result_task, abort_wait_task, stall_wait_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -1526,8 +1656,33 @@ async def run_staged_local_transcription(
             result_task.cancel()
             raise RuntimeError("Transcription cancelled: server shutting down")
 
+        if stall_wait_task in done and not result_task.done():
+            # An active stage went silent past the stall window → it's wedged. Cancel
+            # the workflow: this makes it TERMINAL (freeing its worker slot so the
+            # queue drains, and stopping DBOS from recovery-looping it — the loop that
+            # let thread pools pile to 20k). We do NOT close the pipeline here: a hung
+            # native call isn't interrupted by cancel, so its session may still be in
+            # use; that one job's threads leak until the process restarts, which is
+            # bounded and far better than stalling the whole queue for hours.
+            if not is_shutting_down():
+                try:
+                    await DBOS.cancel_workflow_async(wf_id)
+                except Exception as exc:
+                    logger.warn(
+                        "Failed to cancel stalled transcription workflow",
+                        {"category": "transcription", "workflowId": wf_id, "error": str(exc)},
+                    )
+            result_task.cancel()
+            raise RuntimeError(
+                f"Transcription stalled: no stage progress for {stall.timeout:.0f}s; worker slot freed"
+            )
+
         abort_wait_task.cancel()
+        stall_wait_task.cancel()
         res_dict = await result_task
+        # Completed — stages have returned, so releasing the pipeline's sessions now
+        # is safe (no thread is still inside one).
+        _close_owned_pipeline(task_id)
         return LocalTranscriptionResult(
             transcript=Transcript.model_validate(res_dict["transcript"]),
             discoveredSpeakers=[
@@ -1535,6 +1690,7 @@ async def run_staged_local_transcription(
             ],
         )
     finally:
+        stall.cancel()
         unregister_task_context(task_id)
         if temp_work_dir is not None:
             try:

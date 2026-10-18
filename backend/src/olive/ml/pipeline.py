@@ -87,6 +87,36 @@ class LocalTranscriptionPipeline:
         self.decision_margin: float = float(vp_margin if vp_margin is not None else 0.06)
         self.unload_per_stage: bool = bool(opts.get("unloadPerStage", True))
 
+    def close(self) -> None:
+        """Release every engine's ONNX/torch session (and its intra-op thread pool) now.
+
+        Teardown must not wait for GC. Each engine (ASR, aligner, diarizer, embedder)
+        holds an onnxruntime/torch session whose thread pool stays alive until the
+        session object is finalized. Under DBOS recovery a wedged workflow can mint
+        fresh pipelines, and relying on a GC pass that may never run under load let
+        those pools accumulate (observed: 20k+ threads in one container). Releasing
+        here frees them deterministically. Idempotent and never raises — teardown on
+        an error path must not mask the original failure.
+        """
+        for attr in ("asr_engine", "aligner", "diarizer", "embedding_extractor"):
+            engine = getattr(self, attr, None)
+            release = getattr(engine, "release", None)
+            if not callable(release):
+                continue
+            kwargs: dict[str, Any] = {}
+            try:
+                if "clear_cache" in inspect.signature(release).parameters:
+                    kwargs["clear_cache"] = True
+            except (TypeError, ValueError):
+                kwargs = {}
+            try:
+                release(**kwargs)
+            except Exception as exc:
+                logger.warn(
+                    "Engine release during pipeline.close() failed",
+                    {"category": "transcription", "engine": attr, "error": str(exc)},
+                )
+
     async def transcribe(self, options: dict[str, Any]) -> LocalTranscriptionResult:
         pipeline_t0 = time.perf_counter()
         signal = options.get("signal")
