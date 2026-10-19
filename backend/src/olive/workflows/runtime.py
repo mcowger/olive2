@@ -107,6 +107,14 @@ def resolve_dbos_database_url(
     return f"sqlite:///{Path(tmp.name) / 'dbos.sqlite'}"
 
 
+# Hard cap for the DBOS workflow executor (DBOS default is sys.maxsize = unbounded).
+# Sized above the max concurrent workflows/steps — the sum of stage-queue worker
+# concurrencies, doubled for the driver->pipeline->stage nested-await blocking plus a
+# fixed margin for DBOS internals — so it never starves the nested chain, while
+# hard-capping the thread runaway that OOM-crashed the container under a backlog.
+_MAX_EXECUTOR_THREADS = max(64, sum(s.worker_concurrency for s in STAGE_QUEUE_SPECS) * 2 + 16)
+
+
 def _build_dbos_config(db_url: str) -> DBOSConfig:
     return {
         "name": "olive",
@@ -115,6 +123,14 @@ def _build_dbos_config(db_url: str) -> DBOSConfig:
         "notification_listener_polling_interval_sec": 0.05,
         "scheduler_polling_interval_sec": 1.0,
         "console_log_level": "ERROR",
+        # Cap the DBOS workflow executor. It defaults to sys.maxsize (unbounded):
+        # the transcription driver workflow blocks awaiting its child (which blocks
+        # awaiting stages) and get_result polls frequently, so a large local backlog
+        # spawned ~950+ "dbos-executor" threads and OOM-crashed the container
+        # (measured via py-spy). Concurrent workflows/steps are bounded by the stage
+        # queues (sum of worker_concurrency ~24 incl. nesting), so this is ample
+        # headroom while hard-capping the runaway.
+        "max_executor_threads": _MAX_EXECUTOR_THREADS,
     }
 
 

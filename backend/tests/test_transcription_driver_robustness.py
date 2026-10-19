@@ -300,6 +300,19 @@ def test_get_pipeline_builds_shared_pipeline_once(monkeypatch: pytest.MonkeyPatc
         tw.reset_shared_pipeline()
 
 
+def test_dbos_config_caps_executor_threads() -> None:
+    # DBOS defaults its workflow executor to sys.maxsize (unbounded). The transcription
+    # driver blocks awaiting its child (which blocks awaiting stages) + frequent polling,
+    # so a backlog spawned ~950 "dbos-executor" threads and OOM-crashed the container
+    # (measured via py-spy). The config must cap the executor to a bounded value.
+    from olive.workflows.runtime import _build_dbos_config
+
+    cfg = _build_dbos_config("sqlite:///tmp/olive-test.sqlite")
+    mx = cfg.get("max_executor_threads")
+    assert isinstance(mx, int)
+    assert 0 < mx <= 256  # bounded, not the unbounded default
+
+
 def test_get_pipeline_honors_injected_pipeline() -> None:
     tw.reset_shared_pipeline()
     pipe, _ = _spy_pipeline()
