@@ -8,11 +8,14 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
-## [2026-10-18]
+## [2026-10-19]
 
 ### Fixed
 
-- **Large local-transcription backlogs no longer deadlock.** The local transcription driver now runs on its own queue instead of sharing the 2-slot `pipeline` queue with the child workflow it waits on. Previously, two or more concurrent local transcriptions would occupy both pipeline slots while their child workflows waited for a slot that never freed — deadlocking the whole backlog (seen in the wild as a run stuck for hours with a runaway thread count). A stalled stage is additionally cancelled after `OLIVE_STAGE_STALL_TIMEOUT_SEC` (default 900s) with no progress (jobs merely waiting their turn are never cancelled), and pipeline model sessions are released promptly on completion so their threads don't accumulate across a large backlog.
+- **Large local-transcription backlogs no longer deadlock or exhaust threads.** Two bugs made a big local re-transcription backlog hang for hours with a runaway thread count:
+  1. **Queue deadlock** — the local transcription driver shared the 2-slot `pipeline` queue with the child workflow it waits on, so two or more concurrent transcriptions held both slots while their children waited for a slot that never freed. The driver now runs on its own queue; `pipeline` bounds only the actual concurrent-meeting work.
+  2. **Unbounded DBOS executor** — DBOS's workflow thread pool defaults to unbounded, and because the driver blocks awaiting its child (which blocks awaiting each stage) with frequent polling, a backlog spawned thousands of executor threads until the process ran out of memory. The executor is now capped (sized from the stage-queue concurrencies).
+  The ML engines are also loaded once and reused across meetings instead of rebuilt per meeting, and a stalled stage is cancelled after `OLIVE_STAGE_STALL_TIMEOUT_SEC` (default 900s) of no progress (jobs merely waiting their turn are never cancelled) so one wedged stage can't block the queue.
 
 ## [2026-10-16]
 
