@@ -21,6 +21,7 @@ from dbos import DBOS, SetEnqueueOptions, SetWorkflowID
 from dbos._serialization import DefaultSerializer
 from sqlalchemy import Engine, text
 
+from ..layout import meeting_paths
 from ..logging_db import logger
 from ..ml.align import proportional_word_timestamps
 from ..ml.asr_cohere import CohereAsrEngine
@@ -154,6 +155,83 @@ def configure_recovery_runtime(
         _RECOVERY_CONFIG_DIR = config_dir
     if meetings_dir is not None:
         _RECOVERY_MEETINGS_DIR = meetings_dir
+
+
+def _resolve_recording_audio_path(
+    meeting_id: str | None,
+    db: Engine | None,
+    meetings_dir: str | None,
+) -> str | None:
+    """Resolve a meeting's first recording to its on-disk audio path, or None.
+
+    Used by the decode step to self-heal on recovery: the recording row and the
+    audio file survive a restart even though the in-memory ``audio_bytes`` do not.
+    Returns a path only when the file actually exists on disk — never a guess.
+    """
+    if not meeting_id or db is None or not meetings_dir:
+        return None
+    try:
+        with db.connect() as conn:
+            meeting = (
+                conn.execute(
+                    text("SELECT id, title, start_time FROM meetings WHERE id = :mid"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                return None
+            recording = (
+                conn.execute(
+                    text(
+                        "SELECT path FROM recordings WHERE meeting_id = :mid "
+                        "ORDER BY created_at ASC LIMIT 1"
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        if not recording or not recording.get("path"):
+            return None
+        folder = meeting_paths(
+            meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        candidate = Path(folder) / recording["path"]
+        return str(candidate) if candidate.exists() else None
+    except Exception as exc:
+        logger.warn(
+            "Failed to resolve recording audio path for decode recovery",
+            {"category": "transcription", "meetingId": meeting_id, "error": str(exc)},
+        )
+        return None
+
+
+def _effective_decode_source(
+    payload: dict[str, Any],
+    ctx: TaskExecutionContext | None,
+) -> tuple[str | None, bytes | None]:
+    """Pick the audio source for the decode step, self-healing on recovery.
+
+    Live path: a caller still holds ``audio_bytes`` in its context, or the payload
+    carries an on-disk ``audioPath``. Recovery path: after a restart/OOM the
+    in-memory bytes are gone and a bytes-only caller persisted no path, which used
+    to leave the decode step with neither source (``ValueError``). In that case
+    re-resolve the recording's on-disk path from the DB by ``meetingId`` so the
+    workflow can finish instead of dying terminally on every restart.
+    """
+    audio_bytes = ctx.audio_bytes if ctx is not None else None
+    audio_path = payload.get("audioPath")
+    if audio_bytes is None and (not audio_path or not Path(audio_path).exists()):
+        db = (ctx.db if ctx is not None else None) or _RECOVERY_DB
+        mid = payload.get("meetingId")
+        resolved = _resolve_recording_audio_path(
+            str(mid) if mid else None, db, _RECOVERY_MEETINGS_DIR
+        )
+        if resolved:
+            audio_path = resolved
+    return audio_path, audio_bytes
 
 
 def _ensure_task_context(payload: dict[str, Any]) -> bool:
@@ -452,8 +530,7 @@ async def step_decode_audio(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
         ctx = _TASK_CONTEXTS.get(task_id)
-        audio_bytes = ctx.audio_bytes if ctx is not None else None
-        audio_path = payload.get("audioPath")
+        audio_path, audio_bytes = _effective_decode_source(payload, ctx)
 
         decode_t0 = time.perf_counter()
         target_sr = 16000
