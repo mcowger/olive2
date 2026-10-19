@@ -436,9 +436,29 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        from .workflows import reset_shutdown_flag, shutdown_dbos
+        from .workflows import (
+            ensure_dbos_launched_async,
+            reset_shutdown_flag,
+            shutdown_dbos,
+        )
 
         reset_shutdown_flag()
+        # Launch the DBOS runtime at server startup — inside the running event
+        # loop — so the queue-runner thread and startup recovery come up
+        # immediately. Without this, DBOS launched lazily on the first
+        # transcription request only; after a restart (OOM, redeploy, reboot)
+        # nothing re-triggered it, so an ENQUEUED backlog sat idle forever and
+        # mid-flight PENDING workflows were never recovered. configure_recovery_runtime
+        # (below) wires the recovery sinks but cannot run until DBOS is launched.
+        try:
+            await ensure_dbos_launched_async(
+                config_dir=config_dir, meetings_dir=meetings_dir
+            )
+        except Exception as exc:
+            from .logging_db import logger as _lifespan_logger
+
+            _lifespan_logger.warn("Failed to launch DBOS at startup", {"error": str(exc)})
+
         # The Plaud poller must start here — inside the server's running
         # event loop. Starting it during app construction leaves
         # AsyncIOScheduler bound to a loop that never runs, so interval

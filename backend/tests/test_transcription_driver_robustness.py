@@ -323,3 +323,38 @@ def test_get_pipeline_honors_injected_pipeline() -> None:
     finally:
         tw.unregister_task_context("shared-inj")
         tw.reset_shared_pipeline()
+
+
+def test_lifespan_launches_dbos_at_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FastAPI lifespan must launch DBOS at server startup.
+
+    Regression: DBOS was launched lazily only from inside transcription code
+    paths, so after any restart (OOM, redeploy, reboot) the queue-runner thread
+    never started and an ENQUEUED backlog sat idle forever — nothing drained
+    until an API request happened to wake DBOS. configure_recovery_runtime wired
+    the recovery sinks but could not run without a launched runtime. The lifespan
+    must call ensure_dbos_launched_async so the queue runner + startup recovery
+    come up unattended.
+    """
+    from fastapi.testclient import TestClient
+
+    import olive.workflows as wf
+    from olive.app import create_app
+    from olive.db import create_db
+
+    calls: list[dict[str, object]] = []
+
+    async def _record(
+        config_dir: object = None, meetings_dir: object = None
+    ) -> str:
+        calls.append({"config_dir": config_dir, "meetings_dir": meetings_dir})
+        return "sqlite:///launched-at-startup"
+
+    monkeypatch.setattr(wf, "ensure_dbos_launched_async", _record)
+
+    handle = create_db(":memory:")
+    app = create_app({"db": handle.engine})
+    with TestClient(app):  # entering the context runs the lifespan startup
+        pass
+
+    assert len(calls) == 1, "lifespan must launch DBOS exactly once at startup"
