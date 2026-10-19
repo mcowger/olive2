@@ -267,3 +267,46 @@ def test_driver_queue_registered_and_outsizes_pipeline() -> None:
     assert QUEUE_DRIVER in specs, "driver queue must be registered so DBOS creates it"
     # driver concurrency must exceed the pipeline's so the pipeline is never starved
     assert specs[QUEUE_DRIVER] > specs[QUEUE_PIPELINE]
+
+
+# --- Primary fix: ML engines are built once and reused (bounded threads) ------------
+
+
+def test_get_pipeline_builds_shared_pipeline_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fresh pipeline per meeting leaked onnx/torch threads that teardown never reclaimed;
+    # the pipeline must be a process-wide singleton, kept loaded, reused across meetings.
+    tw.reset_shared_pipeline()
+    built: list[dict[str, object]] = []
+
+    class _DummyPipeline:
+        def __init__(self, opts: dict[str, object]) -> None:
+            built.append(opts)
+            self.unload_per_stage = bool(opts.get("unloadPerStage", True))
+
+    monkeypatch.setattr(tw, "LocalTranscriptionPipeline", _DummyPipeline)
+    c1 = tw.TaskExecutionContext(task_id="shared-1")
+    c2 = tw.TaskExecutionContext(task_id="shared-2")
+    tw.register_task_context(c1)
+    tw.register_task_context(c2)
+    try:
+        p1 = tw._get_pipeline("shared-1", {"unloadPerStage": True})
+        p2 = tw._get_pipeline("shared-2", {})
+        assert p1 is p2  # same instance → not rebuilt per meeting
+        assert len(built) == 1
+        assert built[0]["unloadPerStage"] is False  # kept loaded so sessions are reused
+    finally:
+        tw.unregister_task_context("shared-1")
+        tw.unregister_task_context("shared-2")
+        tw.reset_shared_pipeline()
+
+
+def test_get_pipeline_honors_injected_pipeline() -> None:
+    tw.reset_shared_pipeline()
+    pipe, _ = _spy_pipeline()
+    ctx = tw.TaskExecutionContext(task_id="shared-inj", pipeline=pipe)
+    tw.register_task_context(ctx)
+    try:
+        assert tw._get_pipeline("shared-inj", {}) is pipe  # injection wins over singleton
+    finally:
+        tw.unregister_task_context("shared-inj")
+        tw.reset_shared_pipeline()

@@ -26,3 +26,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if "live" in item.keywords:
             item.add_marker(skip_live)
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_transcription_pipeline():
+    """Isolate the process-wide shared transcription pipeline between tests."""
+    from olive.workflows.transcription_workflow import reset_shared_pipeline
+
+    reset_shared_pipeline()
+    yield
+    reset_shared_pipeline()

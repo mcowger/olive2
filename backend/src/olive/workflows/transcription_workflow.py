@@ -9,6 +9,7 @@ import math
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -206,15 +207,44 @@ async def _emit_progress(task_id: str, payload: dict[str, Any]) -> None:
             await res
 
 
+_SHARED_PIPELINE: LocalTranscriptionPipeline | None = None
+_SHARED_PIPELINE_LOCK = threading.Lock()
+
+
+def reset_shared_pipeline() -> None:
+    """Drop the shared pipeline (tests / shutdown). Not used on the hot path."""
+    global _SHARED_PIPELINE
+    with _SHARED_PIPELINE_LOCK:
+        _SHARED_PIPELINE = None
+
+
 def _get_pipeline(task_id: str, pipeline_options: dict[str, Any] | None) -> LocalTranscriptionPipeline:
+    # Process-wide SINGLETON: build the ML engines once and reuse them for every meeting.
+    # A fresh per-task pipeline created new onnxruntime/torch sessions each time, and their
+    # thread pools are NOT reclaimed on teardown (release()/GC don't free them — measured:
+    # threads stay flat after a job completes), so under throughput they accumulated until
+    # the container OOM-crashed. The stage queues (diarize/asr/speaker_embed/align, each
+    # worker_concurrency=1) serialize engine use, so a single shared set is never driven
+    # concurrently; onnxruntime sessions are thread-safe regardless. Engines are kept loaded
+    # (unloadPerStage=False) so they are reused, not reloaded. Per-meeting thresholds are
+    # applied at call time, not baked into the engines, so sharing is safe.
     ctx = _TASK_CONTEXTS.get(task_id)
     if ctx is not None and ctx.pipeline is not None:
+        # A caller-injected pipeline (e.g. tests, or a custom-engine run) wins — never
+        # override it with the shared one.
         return ctx.pipeline
-    pipe = LocalTranscriptionPipeline(pipeline_options)
+    global _SHARED_PIPELINE
+    if _SHARED_PIPELINE is None:
+        with _SHARED_PIPELINE_LOCK:
+            if _SHARED_PIPELINE is None:
+                opts = dict(pipeline_options or {})
+                opts["unloadPerStage"] = False
+                _SHARED_PIPELINE = LocalTranscriptionPipeline(opts)
     if ctx is not None:
-        ctx.pipeline = pipe
-        ctx.owns_pipeline = True  # we created it → unregister_task_context closes it
-    return pipe
+        # Reference only; the shared pipeline is never closed per-task (owns_pipeline stays
+        # False), so _close_owned_pipeline / unregister leave it intact for the next meeting.
+        ctx.pipeline = _SHARED_PIPELINE
+    return _SHARED_PIPELINE
 
 
 _DEFAULT_STALL_TIMEOUT_SEC = 900.0  # 15 min with no progress = a wedged stage
