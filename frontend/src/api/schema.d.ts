@@ -72,6 +72,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/insights/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Overview Route */
+        get: operations["get_insights_overview_route_api_insights_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/person/{speaker_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Person Route */
+        get: operations["get_insights_person_route_api_insights_person__speaker_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/meeting/{meeting_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Meeting Route */
+        get: operations["get_insights_meeting_route_api_insights_meeting__meeting_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/dyads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Dyads Route */
+        get: operations["get_insights_dyads_route_api_insights_dyads_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/find": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Find Route */
+        get: operations["get_insights_find_route_api_insights_find_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/playbook/{speaker_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Playbook Route */
+        get: operations["get_insights_playbook_route_api_insights_playbook__speaker_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/coaching": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Coaching Route */
+        get: operations["get_insights_coaching_route_api_insights_coaching_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Me Route */
+        get: operations["get_insights_me_route_api_insights_me_get"];
+        /** Put Insights Me Route */
+        put: operations["put_insights_me_route_api_insights_me_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/backfill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Insights Backfill Route */
+        post: operations["post_insights_backfill_route_api_insights_backfill_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Insights Status Route */
+        get: operations["get_insights_status_route_api_insights_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcripts/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Transcript Import Route */
+        post: operations["post_transcript_import_route_api_transcripts_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meetings/{meeting_id}": {
         parameters: {
             query?: never;
@@ -1233,7 +1421,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "plaud" | "upload" | "ios-shortcut";
+            source: "plaud" | "upload" | "ios-shortcut" | "import";
             /**
              * Status
              * @enum {string}
@@ -1295,7 +1483,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "plaud" | "upload" | "ios-shortcut";
+            provider: "plaud" | "upload" | "ios-shortcut" | "import";
             /**
              * Providerrecordingid
              * @default null
@@ -1319,7 +1507,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "transcript" | "summary";
+            kind: "transcript" | "summary" | "signals";
             /** Provider */
             provider: string;
             /**
@@ -2487,6 +2675,660 @@ export interface components {
             /** Sampleresults */
             sampleResults?: components["schemas"]["RapidEnrollSampleResult"][];
         };
+        /** InsightsSeriesPoint */
+        InsightsSeriesPoint: {
+            /** Bucket */
+            bucket: string;
+            /** Value */
+            value: number;
+            /** N */
+            n: number;
+            /** Meetingids */
+            meetingIds: string[];
+            /** Startms */
+            startMs: number;
+        };
+        /** InsightsMomentCounts */
+        InsightsMomentCounts: {
+            /**
+             * Good
+             * @default 0
+             */
+            good: number;
+            /**
+             * Bad
+             * @default 0
+             */
+            bad: number;
+        };
+        /** InsightsDyadPoint */
+        InsightsDyadPoint: {
+            /** Bucket */
+            bucket: string;
+            /** Value */
+            value: number;
+            /** N */
+            n: number;
+            /** Meetingids */
+            meetingIds: string[];
+            /** Startms */
+            startMs: number;
+            /** Tone */
+            tone: number;
+            /**
+             * Warmth
+             * @default null
+             */
+            warmth: number | null;
+            /**
+             * Hostility
+             * @default null
+             */
+            hostility: number | null;
+            moments: components["schemas"]["InsightsMomentCounts"];
+        };
+        /** InsightsCoverage */
+        InsightsCoverage: {
+            /** Analyzedmeetings */
+            analyzedMeetings: number;
+            /** Totalmeetings */
+            totalMeetings: number;
+        };
+        /** InsightsOutlier */
+        InsightsOutlier: {
+            /** Speakerid */
+            speakerId: string;
+            /** Meetingid */
+            meetingId: string;
+            /** Startms */
+            startMs: number;
+            /** Dimension */
+            dimension: string;
+            /** Value */
+            value: number;
+            /** Z */
+            z: number;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "above" | "below";
+            /** Baselinemean */
+            baselineMean: number;
+            /** Baselinestd */
+            baselineStd: number;
+        };
+        /** InsightsUnattributed */
+        InsightsUnattributed: {
+            /** Rows */
+            rows: number;
+            /** Meetingids */
+            meetingIds?: string[];
+        };
+        /** InsightsOverview */
+        InsightsOverview: {
+            /**
+             * From
+             * @default null
+             */
+            from: number | null;
+            /**
+             * To
+             * @default null
+             */
+            to: number | null;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Tag
+             * @default null
+             */
+            tag: string | null;
+            /**
+             * Bucket
+             * @enum {string}
+             */
+            bucket: "week" | "month";
+            /** Series */
+            series: {
+                [key: string]: components["schemas"]["InsightsSeriesPoint"][];
+            };
+            /** Outliers */
+            outliers: components["schemas"]["InsightsOutlier"][];
+            moments: components["schemas"]["InsightsMomentCounts"];
+            coverage: components["schemas"]["InsightsCoverage"];
+            unattributed: components["schemas"]["InsightsUnattributed"];
+        };
+        /** InsightsBaseline */
+        InsightsBaseline: {
+            /** Mean */
+            mean: number;
+            /** Std */
+            std: number;
+            /** N */
+            n: number;
+        };
+        /** InsightsIdentityConfidence */
+        InsightsIdentityConfidence: {
+            /** Rows */
+            rows: number;
+            /** Nameshare */
+            nameShare: number;
+            /** Voiceprintshare */
+            voiceprintShare: number;
+            /** Othershare */
+            otherShare: number;
+        };
+        /** InsightsPersonMeeting */
+        InsightsPersonMeeting: {
+            /** Meetingid */
+            meetingId: string;
+            /** Startms */
+            startMs: number;
+            /**
+             * Title
+             * @default null
+             */
+            title: string | null;
+        };
+        /** InsightsWeekOutlier */
+        InsightsWeekOutlier: {
+            /** Dimension */
+            dimension: string;
+            /** Bucket */
+            bucket: string;
+            /** Value */
+            value: number;
+            /** Z */
+            z: number;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "above" | "below";
+            /** N */
+            n: number;
+            /** Meetingids */
+            meetingIds: string[];
+            /** Startms */
+            startMs: number;
+        };
+        /** InsightsPerson */
+        InsightsPerson: {
+            /** Speakerid */
+            speakerId: string;
+            /**
+             * Name
+             * @default null
+             */
+            name: string | null;
+            /**
+             * From
+             * @default null
+             */
+            from: number | null;
+            /**
+             * To
+             * @default null
+             */
+            to: number | null;
+            /**
+             * Bucket
+             * @enum {string}
+             */
+            bucket: "week" | "month";
+            /** Series */
+            series: {
+                [key: string]: components["schemas"]["InsightsSeriesPoint"][];
+            };
+            /** Baseline */
+            baseline: {
+                [key: string]: components["schemas"]["InsightsBaseline"];
+            };
+            /** Outliermeetings */
+            outlierMeetings: components["schemas"]["InsightsOutlier"][];
+            /** Outlierweeks */
+            outlierWeeks: components["schemas"]["InsightsWeekOutlier"][];
+            /** Meetings */
+            meetings: components["schemas"]["InsightsPersonMeeting"][];
+            moments: components["schemas"]["InsightsMomentCounts"];
+            identityConfidence: components["schemas"]["InsightsIdentityConfidence"];
+            unattributed: components["schemas"]["InsightsUnattributed"];
+        };
+        /** InsightsMeetingSpeaker */
+        InsightsMeetingSpeaker: {
+            /** Meetingid */
+            meetingId: string;
+            /** Startms */
+            startMs: number;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /** Speakerlabel */
+            speakerLabel: string;
+            /**
+             * Identitysource
+             * @default null
+             */
+            identitySource: string | null;
+            /**
+             * Identityconfidence
+             * @default null
+             */
+            identityConfidence: number | null;
+            /** Attributed */
+            attributed: boolean;
+            /** Dimensions */
+            dimensions: {
+                [key: string]: number;
+            };
+            /** Talkms */
+            talkMs: number;
+            /** Turncount */
+            turnCount: number;
+            /** Interruptcount */
+            interruptCount: number;
+            /**
+             * Stance
+             * @default null
+             */
+            stance: string | null;
+        };
+        /** InsightsMoment */
+        InsightsMoment: {
+            /** Id */
+            id: string;
+            /** Meetingid */
+            meetingId: string;
+            /** Startms */
+            startMs: number;
+            /**
+             * Endms
+             * @default null
+             */
+            endMs: number | null;
+            /** Meetingstartms */
+            meetingStartMs: number;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Speakerlabel
+             * @default null
+             */
+            speakerLabel: string | null;
+            /**
+             * Towardspeakerid
+             * @default null
+             */
+            towardSpeakerId: string | null;
+            /**
+             * Towardlabel
+             * @default null
+             */
+            towardLabel: string | null;
+            /** Eventtype */
+            eventType: string;
+            /** Valence */
+            valence: string;
+            /**
+             * Framework
+             * @default null
+             */
+            framework: string | null;
+            /**
+             * Dimension
+             * @default null
+             */
+            dimension: string | null;
+            /**
+             * Severity
+             * @default null
+             */
+            severity: number | null;
+            /** Quote */
+            quote: string;
+            /**
+             * Rationale
+             * @default null
+             */
+            rationale: string | null;
+            /**
+             * Guidance
+             * @default null
+             */
+            guidance: string | null;
+            /**
+             * Identitysource
+             * @default null
+             */
+            identitySource: string | null;
+        };
+        /** InsightsMeetingSignals */
+        InsightsMeetingSignals: {
+            /** Meetingid */
+            meetingId: string;
+            /**
+             * Title
+             * @default null
+             */
+            title: string | null;
+            /** Startms */
+            startMs: number;
+            /** Speakers */
+            speakers: components["schemas"]["InsightsMeetingSpeaker"][];
+            /** Moments */
+            moments: components["schemas"]["InsightsMoment"][];
+        };
+        /** InsightsDyad */
+        InsightsDyad: {
+            /** Fromspeakerid */
+            fromSpeakerId: string;
+            /** Tospeakerid */
+            toSpeakerId: string;
+            /**
+             * Fromname
+             * @default null
+             */
+            fromName: string | null;
+            /**
+             * Toname
+             * @default null
+             */
+            toName: string | null;
+            /** Otherspeakerid */
+            otherSpeakerId: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "meToThem" | "themToMe";
+            /** Series */
+            series: components["schemas"]["InsightsDyadPoint"][];
+            /**
+             * Trend
+             * @enum {string}
+             */
+            trend: "warming" | "cooling" | "stable" | "volatile" | "insufficient";
+            /** N */
+            n: number;
+            moments: components["schemas"]["InsightsMomentCounts"];
+            /** Meetingids */
+            meetingIds: string[];
+            /** Startms */
+            startMs: number;
+        };
+        /** InsightsDyads */
+        InsightsDyads: {
+            /**
+             * Meid
+             * @default null
+             */
+            meId: string | null;
+            /**
+             * Bucket
+             * @enum {string}
+             */
+            bucket: "week" | "month";
+            /** Dyads */
+            dyads: components["schemas"]["InsightsDyad"][];
+            unattributed: components["schemas"]["InsightsUnattributed"];
+        };
+        /** InsightsFindResult */
+        InsightsFindResult: {
+            /** Momentid */
+            momentId: string;
+            /** Meetingid */
+            meetingId: string;
+            /**
+             * Meetingtitle
+             * @default null
+             */
+            meetingTitle: string | null;
+            /** Startms */
+            startMs: number;
+            /**
+             * Endms
+             * @default null
+             */
+            endMs: number | null;
+            /** Quote */
+            quote: string;
+            /** Eventtype */
+            eventType: string;
+            /** Valence */
+            valence: string;
+            /**
+             * Speaker
+             * @default null
+             */
+            speaker: string | null;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Toward
+             * @default null
+             */
+            toward: string | null;
+            /**
+             * Towardspeakerid
+             * @default null
+             */
+            towardSpeakerId: string | null;
+            /** Score */
+            score: number;
+            /**
+             * Enacted
+             * @default null
+             */
+            enacted: boolean | null;
+            /**
+             * Reason
+             * @default null
+             */
+            reason: string | null;
+        };
+        /** InsightsFindResponse */
+        InsightsFindResponse: {
+            /** Query */
+            query: string;
+            /** Results */
+            results: components["schemas"]["InsightsFindResult"][];
+        };
+        /** InsightsEvidence */
+        InsightsEvidence: {
+            /** Quote */
+            quote: string;
+            /** Meetingid */
+            meetingId: string;
+            /**
+             * Startms
+             * @default null
+             */
+            startMs: number | null;
+        };
+        /** InsightsGuidanceItem */
+        InsightsGuidanceItem: {
+            /** Point */
+            point: string;
+            /**
+             * Suggestion
+             * @default null
+             */
+            suggestion: string | null;
+            /** Evidence */
+            evidence: components["schemas"]["InsightsEvidence"][];
+            /** @default null */
+            counterExample: components["schemas"]["InsightsEvidence"] | null;
+        };
+        /** InsightsPlaybook */
+        InsightsPlaybook: {
+            /** Speakerid */
+            speakerId: string;
+            /**
+             * Person
+             * @default null
+             */
+            person: string | null;
+            /**
+             * Summary
+             * @default null
+             */
+            summary: string | null;
+            /** Domore */
+            doMore?: components["schemas"]["InsightsGuidanceItem"][];
+            /** Easeoff */
+            easeOff?: components["schemas"]["InsightsGuidanceItem"][];
+            /**
+             * Samplesize
+             * @default null
+             */
+            sampleSize: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Generatedat
+             * @default null
+             */
+            generatedAt: number | null;
+            /**
+             * Cached
+             * @default false
+             */
+            cached: boolean;
+            /**
+             * Insufficientdata
+             * @default false
+             */
+            insufficientData: boolean;
+        };
+        /** InsightsCoaching */
+        InsightsCoaching: {
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "all" | "speaker";
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Summary
+             * @default null
+             */
+            summary: string | null;
+            /** Strengths */
+            strengths?: components["schemas"]["InsightsGuidanceItem"][];
+            /** Growthareas */
+            growthAreas?: components["schemas"]["InsightsGuidanceItem"][];
+            /**
+             * Samplesize
+             * @default null
+             */
+            sampleSize: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Generatedat
+             * @default null
+             */
+            generatedAt: number | null;
+            /**
+             * Cached
+             * @default false
+             */
+            cached: boolean;
+            /**
+             * Insufficientdata
+             * @default false
+             */
+            insufficientData: boolean;
+        };
+        /** InsightsBackfillResult */
+        InsightsBackfillResult: {
+            /** Queued */
+            queued: number;
+            /** Skipped */
+            skipped: number;
+        };
+        /** InsightsStatus */
+        InsightsStatus: {
+            /** Transcribedmeetings */
+            transcribedMeetings: number;
+            /** Analyzedmeetings */
+            analyzedMeetings: number;
+            /** Pendingmeetings */
+            pendingMeetings: number;
+        };
+        /** InsightsMe */
+        InsightsMe: {
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /** Aliases */
+            aliases?: string[];
+        };
+        /** TranscriptImportSpeaker */
+        TranscriptImportSpeaker: {
+            /** Label */
+            label: string;
+            /** Speakerid */
+            speakerId: string;
+            /** Identitysource */
+            identitySource: string;
+        };
+        /** TranscriptImportResult */
+        TranscriptImportResult: {
+            /** Meetingid */
+            meetingId: string;
+            /** Deduped */
+            deduped: boolean;
+            /**
+             * Format
+             * @default null
+             */
+            format: string | null;
+            /**
+             * Subtype
+             * @default null
+             */
+            subtype: string | null;
+            /**
+             * Segmentcount
+             * @default null
+             */
+            segmentCount: number | null;
+            /**
+             * Starttime
+             * @default null
+             */
+            startTime: number | null;
+            /** Speakers */
+            speakers?: components["schemas"]["TranscriptImportSpeaker"][];
+            /** Unmappednames */
+            unmappedNames?: string[];
+            /** Warnings */
+            warnings?: string[];
+            /**
+             * Timingsynthetic
+             * @default null
+             */
+            timingSynthetic: boolean | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -2559,6 +3401,279 @@ export interface operations {
         };
     };
     post_ingest_route_api_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_insights_overview_route_api_insights_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_insights_person_route_api_insights_person__speaker_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                speaker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_insights_meeting_route_api_insights_meeting__meeting_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_insights_dyads_route_api_insights_dyads_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_insights_find_route_api_insights_find_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_insights_playbook_route_api_insights_playbook__speaker_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                speaker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_insights_coaching_route_api_insights_coaching_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_insights_me_route_api_insights_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    put_insights_me_route_api_insights_me_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_insights_backfill_route_api_insights_backfill_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_insights_status_route_api_insights_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_transcript_import_route_api_transcripts_import_post: {
         parameters: {
             query?: never;
             header?: never;
