@@ -12,11 +12,14 @@ import typer
 from .main import run_server
 from .ml.model_store import ModelStorageError, download_local_models
 from .services.backup import BackupService
-from .settings import get_effective_hf_token
+from .services.census import compute_census, format_census_report, open_readonly_engine
+from .settings import get_effective_hf_token, resolve_paths
 
 app = typer.Typer(help="Olive — Self-Hosted AI Meeting Intelligence CLI")
 models_app = typer.Typer(help="Manage local ML speech & diarization models")
+insights_app = typer.Typer(help="Olive Insights tooling (read-only corpus reports)")
 app.add_typer(models_app, name="models")
+app.add_typer(insights_app, name="insights")
 
 
 @app.command("serve")
@@ -72,6 +75,21 @@ def download_models_cmd() -> None:
     except ModelStorageError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@insights_app.command("census")
+def insights_census_cmd() -> None:
+    """Report read-only corpus stats over stored transcripts (sizing for Insights)."""
+    paths = resolve_paths()
+    if not Path(paths.database_path).exists():
+        typer.echo(f"Error: database not found at {paths.database_path}", err=True)
+        raise typer.Exit(code=1)
+    engine = open_readonly_engine(paths.database_path)
+    try:
+        stats = compute_census(engine, paths.meetings_dir)
+    finally:
+        engine.dispose()
+    typer.echo(format_census_report(stats))
 
 
 if __name__ == "__main__":
