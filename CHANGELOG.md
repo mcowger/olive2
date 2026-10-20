@@ -8,6 +8,15 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-20]
+
+### Added
+
+- **Insights — cross-meeting analysis of tone, relationships, and communication.** A new Insights tab analyzes your whole meeting history (not one meeting at a time). An LLM pass over each transcript extracts per-speaker communication signals and notable moments — accusations, praise, conflict, repair — each with a verbatim quote, a timestamp, and a framework tag (e.g. Gottman criticism/contempt/defensiveness/stonewalling, nonviolent-communication). It then rolls those up into: your tone over time, who you bring out the best and worst in, relationship trajectories (warming vs cooling), wins and flags, per-person communication playbooks ("get to the point faster with X; give Y more context"), coaching takeaways, and a natural-language "find the call" search ("the meeting where I was accused of sabotage"). Every figure drills down to the exact meeting and transcript moment, judgments are labeled model-inferred and backed by quotes, and low-confidence/unidentified speakers are shown as unattributed rather than guessed. Local-only: all analysis runs through your configured local LLM and never leaves the box, and the feature ships **off by default** (`OLIVE_INSIGHTS_ENABLED`). Analysis runs automatically when a transcript finishes, and a backfill covers existing meetings; REST (`/api/insights/*`) and MCP tools (`insights_overview`, `person_insights`, `meeting_signals`, `find_insight_events`, `person_playbook`, and the gated `backfill_insights`) are available.
+- **A speaker-naming pass** proposes real names for generic "Speaker N" labels from how people are addressed in the conversation (with the evidence quote), so cross-meeting per-person analysis works on existing transcripts; you confirm the guesses, and confirmations flow into the analysis.
+- **Import transcripts without audio.** `POST /api/transcripts/import` and an Import Transcript button accept Zoom `.vtt`, SRT, or speaker-labeled text as a first-class meeting (no recording), with content-hash dedup and name-based speaker mapping — so meetings you only have a transcript for are searchable, summarizable, and included in Insights.
+- **`olive insights census`** — a read-only CLI report (meeting/transcript coverage, word/token volume, duration spread, speaker-identification coverage, month-by-month counts) for sizing and sanity before enabling Insights.
+
 ## [2026-10-16]
 
 ### Changed
