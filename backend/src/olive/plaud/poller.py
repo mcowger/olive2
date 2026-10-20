@@ -810,6 +810,25 @@ class PlaudPoller:
             },
         )
 
+    def _enqueue_insights(self, meeting_id: str) -> None:
+        """Queue Insights analysis for a finalized Plaud transcript (no-op without a service)."""
+        enqueue = getattr(self.transcription_service, "_enqueue_insights", None)
+        if not callable(enqueue):
+            return
+
+        async def _run() -> None:
+            try:
+                res = enqueue(meeting_id)
+                if inspect.isawaitable(res):
+                    await res
+            except Exception as exc:
+                self.logger.warn(
+                    "Insights enqueue failed for Plaud transcript",
+                    {"meetingId": meeting_id, "error": str(exc)},
+                )
+
+        self._spawn_background(_run())
+
     def _hand_off_transcription(self, meeting_id: str, context: str) -> None:
         """Queue automatic transcription without blocking the poll cycle."""
         if not self.transcription_service:
@@ -925,6 +944,11 @@ class PlaudPoller:
         should_retranscribe = always or (when_unnamed and has_only_generic) or not segments
         if should_retranscribe:
             self._hand_off_transcription(meeting["id"], "Plaud meeting")
+        elif segments:
+            # The Plaud transcript is final as ingested; a hand-off above
+            # instead produces its own transcript, which enqueues insights
+            # when the transcription service finalizes it.
+            self._enqueue_insights(meeting["id"])
 
         if segments and not (always and self.transcription_service):
             # Skipped when always-re-transcribe fires: the replacement

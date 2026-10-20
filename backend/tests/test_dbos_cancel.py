@@ -98,3 +98,38 @@ async def test_cancel_launches_dbos_when_not_launched(
     assert count == 2
     assert sorted(cancelled) == ["local-abcd1234", "local-abcd1234-6"]
     handle.engine.dispose()
+
+
+async def test_cancel_matches_insights_job_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``insights:{meeting_id}:{hex8}`` jobs (the ``insights`` queue) are cancelled with the meeting."""
+    handle = create_db(":memory:")
+    dbos_path = tmp_path / "dbos.sqlite"
+    with sqlite3.connect(str(dbos_path)) as sconn:
+        sconn.execute(
+            "CREATE TABLE workflow_status (workflow_uuid TEXT, parent_workflow_id TEXT, status TEXT)"
+        )
+        sconn.executemany(
+            "INSERT INTO workflow_status VALUES (?, ?, ?)",
+            [
+                ("insights:m-ins:abcd1234", None, "ENQUEUED"),
+                ("insights:m-other:abcd1234", None, "ENQUEUED"),
+                ("insights:m-ins:done5678", None, "SUCCESS"),
+            ],
+        )
+
+    cancelled: list[str] = []
+
+    async def fake_cancel(workflow_id: str) -> None:
+        cancelled.append(workflow_id)
+
+    monkeypatch.setattr(wf, "is_dbos_launched", lambda: True)
+    monkeypatch.setattr(wf, "get_existing_dbos_sqlite_path", lambda **_k: dbos_path)
+    monkeypatch.setattr(wf, "DBOS", SimpleNamespace(cancel_workflow_async=fake_cancel))
+
+    count = await wf.cancel_dbos_workflows_for_meeting(
+        "m-ins", db=handle.engine, config_dir=str(tmp_path), meetings_dir=str(tmp_path)
+    )
+
+    assert count == 1
+    assert cancelled == ["insights:m-ins:abcd1234"]
+    handle.engine.dispose()

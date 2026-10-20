@@ -280,6 +280,7 @@ class TranscriptionService:
         )
         self.now: Callable[[], int] = now or opts.get("now") or (lambda: int(time.time() * 1000))
         self.summary_service = summary_service or opts.get("summaryService") or opts.get("summary_service")
+        self.insights_service: Any = opts.get("insightsService") or opts.get("insights_service")
         self.plaud_poller = plaud_poller or opts.get("plaudPoller") or opts.get("plaud_poller")
         self._active_jobs: dict[str, _ActiveTranscriptionJob] = {}
         self._active_progress: dict[str, TranscriptionProgressUpdate] = {}
@@ -393,6 +394,11 @@ class TranscriptionService:
 
     setSummaryService = set_summary_service
 
+    def set_insights_service(self, service: Any) -> None:
+        self.insights_service = service
+
+    setInsightsService = set_insights_service
+
     def set_plaud_poller(self, poller: Any) -> None:
         self.plaud_poller = poller
 
@@ -467,6 +473,18 @@ class TranscriptionService:
             )
         except Exception:
             await self._auto_summarize(meeting_id)
+
+    async def _enqueue_insights(self, meeting_id: str) -> None:
+        """Queue Insights analysis for a finalized transcript; never raises."""
+        if not self.insights_service:
+            return
+        try:
+            await self.insights_service.enqueue_analyze(meeting_id)
+        except Exception as exc:
+            self.logger.warn(
+                "Insights enqueue skipped or failed on transcript completion",
+                {"category": "insights", "meetingId": meeting_id, "error": str(exc)},
+            )
 
     async def cancel_transcription(self, meeting_id: str) -> dict[str, Any]:
         self.logger.info(
@@ -1665,6 +1683,7 @@ class TranscriptionService:
                 )
 
             asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
+            asyncio.create_task(self._enqueue_insights(meeting["id"]))
 
             self.emit_progress(
                 meeting["id"],
@@ -2533,6 +2552,7 @@ class TranscriptionService:
             )
 
         asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
+        asyncio.create_task(self._enqueue_insights(meeting["id"]))
 
         return {
             "stageRunId": stage_run_id,

@@ -46,6 +46,7 @@ from .queues import (
     QUEUE_ASSEMBLYAI,
     QUEUE_DIARIZE,
     QUEUE_FFMPEG,
+    QUEUE_INSIGHTS,
     QUEUE_PIPELINE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
@@ -1193,6 +1194,28 @@ async def enqueue_driver_job(
     return handle
 
 
+def configure_insights_queue(insights_service: Any) -> None:
+    """Register the durable ``insights`` queue hook for ``insights_service``.
+
+    ``InsightsService.enqueue_analyze`` calls the hook; the hook enqueues
+    ``analyze_meeting`` as a DBOS stage job, deduplicated per meeting.
+    """
+    from ..services.insights import extract as insights_extract
+
+    async def _hook(meeting_id: str) -> bool:
+        await enqueue_stage_job(
+            QUEUE_INSIGHTS,
+            lambda: insights_service.analyze_meeting(meeting_id),
+            deduplication_id=f"insights:{meeting_id}",
+            workflow_id=f"insights:{meeting_id}:{uuid.uuid4().hex[:8]}",
+            label="insights:analyze",
+            meeting_id=meeting_id,
+        )
+        return True
+
+    insights_extract.set_enqueue_hook(_hook)
+
+
 def _extract_job_details(wf: Any) -> tuple[str, str | None]:
     raw_name = str(getattr(wf, "name", "") or "job")
     short_name = raw_name.split(".")[-1].replace("<temp>.", "")
@@ -1873,6 +1896,11 @@ async def cancel_dbos_workflows_for_meeting(
                     # this prefix matcher in sync with that format.
                     or wid.startswith(f"reidentify-speakers:{meeting_id}:")
                     or pid.startswith(f"reidentify-speakers:{meeting_id}:")
+                    # Insights analysis jobs enqueued via the hook registered by
+                    # configure_insights_queue use ``insights:{meeting_id}:{hex8}``
+                    # workflow ids — keep this prefix matcher in sync with that format.
+                    or wid.startswith(f"insights:{meeting_id}:")
+                    or pid.startswith(f"insights:{meeting_id}:")
                     or any(wid.startswith(f"{p}-") for p in parent_ids)
                 ):
                     wf_ids_to_cancel.add(wid)
@@ -1891,11 +1919,14 @@ async def cancel_dbos_workflows_for_meeting(
 
 
 __all__ = [
+    "configure_insights_queue",
+    "configure_insights_queue",
     "QUEUE_ALIGN",
     "QUEUE_ASSEMBLYAI",
     "QUEUE_ASR",
     "QUEUE_DIARIZE",
     "QUEUE_FFMPEG",
+    "QUEUE_INSIGHTS",
     "QUEUE_PIPELINE",
     "QUEUE_PLAUD_SYNC",
     "QUEUE_SPEAKER_EMBED",

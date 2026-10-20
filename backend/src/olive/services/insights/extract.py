@@ -268,12 +268,17 @@ _enqueue_hook: EnqueueHook | None = None
 def set_enqueue_hook(hook: EnqueueHook | None) -> None:
     """Register the function that durably enqueues ``analyze_meeting`` for a meeting.
 
-    TODO(P1b): the workflows layer registers a hook built on ``enqueue_stage_job`` and a new
-    ``insights`` queue here, keeping this module free of DBOS imports. Until then
-    :meth:`InsightsService.enqueue_analyze` is a no-op.
+    The workflows layer registers a hook built on ``enqueue_stage_job`` and the ``insights``
+    queue (``configure_insights_queue``), keeping this module free of DBOS imports. Until one is
+    registered :meth:`InsightsService.enqueue_analyze` is a no-op.
     """
     global _enqueue_hook
     _enqueue_hook = hook
+
+
+def get_enqueue_hook() -> EnqueueHook | None:
+    """The currently registered queue hook, if any (used by the backfill)."""
+    return _enqueue_hook
 
 
 async def _call_llm_generate(llm_service: Any, options: dict[str, Any]) -> LlmGenerateResult:
@@ -454,7 +459,7 @@ class InsightsService:
         """Request a durable analysis job for ``meeting_id``; True if one was queued.
 
         Returns False when insights is disabled or no queue hook is registered yet.
-        TODO(P1b): wired to the DBOS ``insights`` queue via :func:`set_enqueue_hook`.
+        The hook is the DBOS ``insights`` queue wiring registered via :func:`set_enqueue_hook`.
         """
         if not self.is_enabled():
             return False
@@ -868,5 +873,6 @@ __all__ = [
     "merge_chunks",
     "normalize_text",
     "parse_allowed_hosts",
+    "get_enqueue_hook",
     "set_enqueue_hook",
 ]
