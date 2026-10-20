@@ -121,6 +121,8 @@ class AppConfig(BaseModel):
     assemblyaiApiKey: str = Field(default="")
     museApiKey: str = Field(default="")
     insightsEnabled: bool = Field(default=False)
+    insightsProvider: str = Field(default="")
+    insightsModel: str = Field(default="")
 
     @field_validator("localAsrModel", mode="before")
     @classmethod
