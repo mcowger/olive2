@@ -855,6 +855,8 @@ class InsightsMoment(CamelModel):
     rationale: str | None = None
     guidance: str | None = None
     identitySource: str | None = None
+    # False when the quote could not be found verbatim in the transcript (ungrounded).
+    verified: bool = True
 
 
 class InsightsMeetingSpeaker(CamelModel):

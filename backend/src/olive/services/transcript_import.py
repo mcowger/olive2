@@ -18,6 +18,7 @@ trends, so :class:`MissingStartTimeError` is raised when none is supplied or der
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -72,10 +73,16 @@ def _parse_start_time(value: Any) -> int | None:
     if isinstance(value, bool):
         raise ValueError(f"Invalid startTime: {value!r}")
     if isinstance(value, int | float):
-        return int(value)
+        try:
+            return int(value)
+        except (OverflowError, ValueError) as exc:  # inf / nan
+            raise ValueError(f"Invalid startTime: {value!r}") from exc
     raw = str(value).strip()
-    if re.fullmatch(r"\d+(?:\.\d+)?", raw):
-        return int(float(raw))
+    if re.fullmatch(r"\d{1,30}(?:\.\d{1,30})?", raw):
+        try:
+            return int(float(raw))
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(f"Invalid startTime: {value!r}") from exc
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
@@ -157,7 +164,8 @@ class TranscriptImportService:
         fmt: ImportFormat | None = opts.get("format")
         if fmt is not None and fmt not in ("vtt", "srt", "text"):
             raise ValueError(f"Unsupported transcript format: {fmt!r}")
-        parsed = parse_transcript(content, filename, fmt)
+        # Regex-heavy and O(size): keep it off the event loop so a slow parse cannot stall the server.
+        parsed = await asyncio.to_thread(parse_transcript, content, filename, fmt)
 
         start_time = _parse_start_time(opts.get("startTime"))
         if start_time is None:

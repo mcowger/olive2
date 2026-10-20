@@ -15,7 +15,12 @@ from olive.db import create_db
 from olive.layout import meeting_paths
 from olive.schemas import LlmSettings
 from olive.services.insights.extract import EgressBlockedError
-from olive.services.insights.llm_query import InsightsLlmService
+from olive.services.insights.llm_query import (
+    MAX_FILTER_TERMS,
+    MAX_FIND_EVENTS_LIMIT,
+    EventFilter,
+    InsightsLlmService,
+)
 from olive.services.insights.validate import InsightsValidationError
 
 PROXY_HOST = "llm-proxy.local:3020"
@@ -129,6 +134,7 @@ def _moment(
     severity: float,
     quote: str,
     rationale: str = "",
+    verified: int = 1,
 ) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -137,7 +143,7 @@ def _moment(
                 INSERT INTO meeting_moments (id, meeting_id, speaker_id, toward_speaker_id, start_ms, end_ms,
                   turn_start_idx, turn_end_idx, event_type, valence, severity, quote, rationale, verified,
                   created_at)
-                VALUES (:id, :m, :s, :t, :start, :end, :turn, :turn, :ev, :val, :sev, :q, :r, 1, :now)
+                VALUES (:id, :m, :s, :t, :start, :end, :turn, :turn, :ev, :val, :sev, :q, :r, :ver, :now)
                 """
             ),
             {
@@ -153,6 +159,7 @@ def _moment(
                 "sev": severity,
                 "q": quote,
                 "r": rationale,
+                "ver": verified,
                 "now": NOW,
             },
         )
@@ -500,4 +507,69 @@ async def test_coaching_speaker_scope_requires_id_and_caches_per_speaker(tmp_pat
             for r in conn.execute(text("SELECT key FROM sync_state WHERE key LIKE 'insights.coaching:%'"))
         ]
     assert keys == ["insights.coaching:spk-bob"]
+    handle.engine.dispose()
+
+
+# ------------------------------------------------------------- trust + input bounds
+
+
+async def test_find_events_excludes_unverified_moments(tmp_path: Path) -> None:
+    def responder(n: int, opts: dict[str, Any]) -> str:
+        if n == 1:
+            return _filter_json(
+                eventTypes=["hallucination"], keywords=["ghost"], valence=None, dateRange=None
+            )
+        return _rerank_json("c1")
+
+    handle, llm, service = _make(tmp_path, responder)
+    _moment(
+        handle.engine, "mom-ghost", "m1", speaker="spk-bob", toward="spk-phil", turn=2, event="hallucination",
+        valence="bad", severity=1.0, quote="A ghost quote nobody said ghost.", verified=0,
+    )  # fmt: skip
+    await service.find_events("ghost")
+    prompt = llm.calls[1]["prompt"]
+    assert "ghost quote" not in prompt  # neither the SQL match nor the fallback surfaces it
+    assert "We are letting you go" in prompt  # verified moments still do
+
+    llm.calls.clear()
+    await service.find_events("ghost", include_unverified=True)
+    assert "ghost quote" in llm.calls[1]["prompt"]
+    handle.engine.dispose()
+
+
+async def test_find_events_clamps_limit(tmp_path: Path) -> None:
+    def responder(n: int, opts: dict[str, Any]) -> str:
+        return _filter_json() if n == 1 else _rerank_json("c1")
+
+    handle, llm, service = _make(tmp_path, responder)
+    seen: list[int] = []
+    real = service._select_candidates
+
+    def spy(flt: Any, self_id: Any, limit: int, include_unverified: bool = False) -> Any:
+        seen.append(limit)
+        return real(flt, self_id, limit, include_unverified)
+
+    service._select_candidates = spy  # type: ignore[method-assign]
+    await service.find_events("sabotage", limit=10**6)
+    assert seen and seen[0] <= MAX_FIND_EVENTS_LIMIT * 4
+    assert f"{MAX_FIND_EVENTS_LIMIT}" in llm.calls[1]["prompt"]
+    assert str(10**6) not in llm.calls[1]["prompt"]
+    handle.engine.dispose()
+
+
+def test_select_candidates_truncates_oversized_term_lists(tmp_path: Path) -> None:
+    handle, _, service = _make(tmp_path, lambda n, o: "{}")
+    captured: dict[str, Any] = {}
+    real = service._query_moments
+
+    def spy(where: str, params: dict[str, Any], limit: int, include_unverified: bool = False) -> Any:
+        captured.setdefault("params", params)
+        return real(where, params, limit, include_unverified)
+
+    service._query_moments = spy  # type: ignore[method-assign]
+    flt = EventFilter(eventTypes=[f"t{i}" for i in range(5000)], keywords=[f"k{i}" for i in range(5000)])
+    service._select_candidates(flt, None, 5)
+    params = captured["params"]
+    assert sum(1 for k in params if k.startswith("et")) == MAX_FILTER_TERMS
+    assert sum(1 for k in params if k.startswith("kw")) == MAX_FILTER_TERMS
     handle.engine.dispose()

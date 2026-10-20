@@ -18,6 +18,7 @@ from sqlalchemy.engine import Engine
 
 from .layout import meeting_paths
 from .services.insights import backfill as insights_backfill
+from .services.insights.llm_query import MAX_FIND_EVENTS_LIMIT
 from .services.insights.query import _to_ms
 from .services.meetings import (
     delete_meeting,
@@ -485,7 +486,7 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
             "required": ["query"],
             "properties": {
                 "query": {"type": "string", "description": "What to look for, e.g. 'times Alice interrupted me'"},
-                "limit": {"type": "integer", "default": 5, "description": "Maximum events to return"},
+                "limit": {"type": "integer", "default": 5, "description": "Maximum events to return (capped at 50)"},
             },
         },
     },
@@ -1868,6 +1869,7 @@ async def _handle_insights_mcp_tools(
                 limit = int(arguments["limit"])
             except (TypeError, ValueError):
                 return _error_result("limit must be an integer")
+        limit = min(max(limit, 1), MAX_FIND_EVENTS_LIMIT)
         results = await insights_llm_service.find_events(query, limit)
         return _text_result({"query": query, "results": results})
 

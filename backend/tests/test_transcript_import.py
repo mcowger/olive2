@@ -292,3 +292,10 @@ async def test_import_then_delete_meeting(env: Env) -> None:
     # Content can be re-imported after deletion.
     again = await _import_zoom(env)
     assert again["deduped"] is False
+
+
+async def test_huge_digit_start_time_is_value_error(env: Env) -> None:
+    with pytest.raises(ValueError):
+        await env.service.import_transcript(
+            {"content": PLAIN_TEXT, "filename": "n.txt", "startTime": "9" * 400}
+        )

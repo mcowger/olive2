@@ -169,6 +169,10 @@ DEFAULT_QUERY_CONFIG: dict[str, int] = {
 
 PLAYBOOK_KEY_PREFIX = "insights.playbook:"
 COACHING_KEY_PREFIX = "insights.coaching:"
+# Hard bounds on caller/LLM-controlled sizes: the result count, and how many LLM-emitted
+# event types / keywords reach the SQL (each becomes a bound variable and a LIKE clause).
+MAX_FIND_EVENTS_LIMIT = 50
+MAX_FILTER_TERMS = 32
 
 T = TypeVar("T", bound=CamelModel)
 
@@ -483,21 +487,30 @@ class InsightsLlmService(InsightsService):
     """
     _ORDER = " ORDER BY COALESCE(mm.severity, 0) DESC, m.start_time DESC, mm.start_ms ASC"
 
-    def _query_moments(self, where: str, params: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    def _query_moments(
+        self, where: str, params: dict[str, Any], limit: int, include_unverified: bool = False
+    ) -> list[dict[str, Any]]:
+        """Moments matching ``where``; ungrounded (``verified = 0``) ones only when asked for."""
+        if not include_unverified:
+            where = f"{where} AND mm.verified = 1" if where.strip() else "WHERE mm.verified = 1"
         sql = f"{self._MOMENT_SELECT} {where} {self._ORDER} LIMIT :limit"
         with self.db.connect() as conn:
             return [dict(r) for r in conn.execute(text(sql), {**params, "limit": limit}).mappings().all()]
 
-    def _select_candidates(self, flt: EventFilter, self_id: str | None, limit: int) -> list[dict[str, Any]]:
+    def _select_candidates(
+        self, flt: EventFilter, self_id: str | None, limit: int, include_unverified: bool = False
+    ) -> list[dict[str, Any]]:
         """Tier 2: SQL candidates for ``flt`` by severity; most severe overall when none match."""
         clauses: list[str] = []
         params: dict[str, Any] = {}
 
         terms: list[str] = []
-        for i, label in enumerate(t.strip().lower() for t in flt.eventTypes if t.strip()):
+        labels = [t.strip().lower() for t in flt.eventTypes if t.strip()][:MAX_FILTER_TERMS]
+        for i, label in enumerate(labels):
             params[f"et{i}"] = f"%{_like_escape(label)}%"
             terms.append(f"LOWER(mm.event_type) LIKE :et{i} ESCAPE '\\'")
-        for i, word in enumerate(k.strip().lower() for k in flt.keywords if k.strip()):
+        words = [k.strip().lower() for k in flt.keywords if k.strip()][:MAX_FILTER_TERMS]
+        for i, word in enumerate(words):
             params[f"kw{i}"] = f"%{_like_escape(word)}%"
             terms.append(
                 f"(LOWER(mm.quote) LIKE :kw{i} ESCAPE '\\' "
@@ -521,8 +534,9 @@ class InsightsLlmService(InsightsService):
                 clauses.append("m.start_time < :d1")
                 params["d1"] = end
 
-        rows = self._query_moments("WHERE " + " AND ".join(clauses) if clauses else "", params, limit)
-        return rows or self._query_moments("", {}, limit)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = self._query_moments(where, params, limit, include_unverified)
+        return rows or self._query_moments("", {}, limit, include_unverified)
 
     def _context_for(
         self,
@@ -552,16 +566,20 @@ class InsightsLlmService(InsightsService):
 
     # -- find_events -------------------------------------------------------------
 
-    async def find_events(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    async def find_events(
+        self, query: str, limit: int = 5, include_unverified: bool = False
+    ) -> list[dict[str, Any]]:
         """Find the moments matching a natural-language description, best first.
 
         Returns ``{meetingId, startMs, quote, eventType, toward, score, reason, enacted, ...}``
         rows. Only the candidate moments (and a little context around them) reach the model.
+        ``limit`` is clamped to ``MAX_FIND_EVENTS_LIMIT``; ungrounded moments are excluded unless
+        ``include_unverified``.
         """
         query = (query or "").strip()
         if not query:
             raise ValueError("query is required")
-        limit = max(1, int(limit))
+        limit = min(max(1, int(limit)), MAX_FIND_EVENTS_LIMIT)
         prompts = self._query_prompts()
         config, knobs = self._query_config()
         ask = await self._open_session(config)
@@ -579,7 +597,10 @@ class InsightsLlmService(InsightsService):
         )
 
         candidates = self._select_candidates(
-            flt, self._self_id(config), max(knobs["retrievalCandidates"], limit)
+            flt,
+            self._self_id(config),
+            min(max(knobs["retrievalCandidates"], limit), MAX_FIND_EVENTS_LIMIT * 4),
+            include_unverified,
         )
         if not candidates:
             return []
@@ -953,6 +974,8 @@ __all__ = [
     "DEFAULT_QUERY_PROMPTS",
     "CoachingOut",
     "EventFilter",
+    "MAX_FILTER_TERMS",
+    "MAX_FIND_EVENTS_LIMIT",
     "InsightsLlmService",
     "PlaybookOut",
     "RerankResult",

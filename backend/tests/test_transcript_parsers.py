@@ -240,3 +240,34 @@ def test_transcript_shape_matches_schema() -> None:
     dumped = parsed.transcript.model_dump(by_alias=True, exclude_none=True)
     assert dumped["segments"][0]["speaker"] == "Alice Smith"
     assert dumped["durationMs"] == 3725000
+
+
+# -- ReDoS guards ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        " " * 60_000,
+        "Alice" + " " * 60_000,
+        "[00:00:01]" + " " * 60_000,
+        "Alice (00:00:01)" + " " * 60_000,
+        "[Alice]" + " " * 60_000 + "x",
+        "A" + " " * 60_000 + "no colon",
+        "<" * 60_000,
+        "<v " * 20_000,
+    ],
+)
+@pytest.mark.parametrize("fmt", ["text", "vtt", "srt"])
+def test_pathological_lines_parse_in_linear_time(line: str, fmt: str) -> None:
+    import time
+
+    content = f"Alice: hello there\n{line}\nBob: bye\n"
+    if fmt != "text":
+        content = f"WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\n{line}\n"
+    started = time.perf_counter()
+    try:
+        parse_transcript(content, None, fmt)  # type: ignore[arg-type]
+    except ValueError:
+        pass  # "no segments" is an acceptable outcome; only runtime matters
+    assert time.perf_counter() - started < 1.0

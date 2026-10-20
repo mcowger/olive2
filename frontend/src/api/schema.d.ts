@@ -3010,6 +3010,11 @@ export interface components {
              * @default null
              */
             identitySource: string | null;
+            /**
+             * Verified
+             * @default true
+             */
+            verified: boolean;
         };
         /** InsightsMeetingSignals */
         InsightsMeetingSignals: {

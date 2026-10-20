@@ -23,6 +23,7 @@ from .layout import meeting_paths
 from .ml.audio import enhance_audio_file_async
 from .schemas import LogItem
 from .services.ingest import IngestService
+from .services.insights.llm_query import MAX_FIND_EVENTS_LIMIT
 from .services.meetings import (
     delete_meeting,
     get_meeting,
@@ -64,6 +65,34 @@ def _bool_query_param(value: str | None, default: bool) -> bool:
 
 
 DEFAULT_MAX_TRANSCRIPT_IMPORT_BYTES = 10 * 1024 * 1024
+# Allowance for multipart framing / JSON escaping on top of the transcript's own byte cap.
+_IMPORT_BODY_OVERHEAD_BYTES = 64 * 1024
+
+
+async def _read_capped_body(request: Request, limit: int) -> bytes | None:
+    """Read the request body, returning ``None`` as soon as more than ``limit`` bytes arrive."""
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _replayed_request(request: Request, body: bytes) -> Request:
+    """A request over the same scope whose body is the already-read ``body``."""
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(request.scope, receive)
 
 
 def _time_bound_param(value: Any) -> int | None:
@@ -853,7 +882,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             except ValueError:
                 return JSONResponse({"error": "limit must be an integer"}, status_code=400)
         try:
-            results = await get_insights_llm_service().find_events(query, limit)
+            results = await get_insights_llm_service().find_events(
+                query, min(max(limit, 1), MAX_FIND_EVENTS_LIMIT)
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
@@ -988,10 +1019,24 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             return too_large
 
         content_type = (request.headers.get("content-type") or "").lower()
+        is_multipart = "multipart/form-data" in content_type
+        is_json = "application/json" in content_type
+        if not is_multipart and not is_json:
+            return JSONResponse(
+                {"error": "Multipart form data or a JSON body is required"}, status_code=400
+            )
+
+        # Content-Length can be absent (chunked) or a lie, so count bytes as they arrive and stop
+        # at the cap instead of letting the framework buffer an unbounded body. The slack covers
+        # multipart framing / JSON escaping around a transcript that is itself within the cap.
+        raw = await _read_capped_body(request, max_transcript_import_bytes + _IMPORT_BODY_OVERHEAD_BYTES)
+        if raw is None:
+            return too_large
+
         opts_in: dict[str, Any]
-        if "multipart/form-data" in content_type:
+        if is_multipart:
             try:
-                form = await request.form()
+                form = await _replayed_request(request, raw).form()
             except Exception:
                 return JSONResponse({"error": "Invalid multipart form data"}, status_code=400)
             file_field = form.get("file")
@@ -1007,10 +1052,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 value = form.get(key)
                 if isinstance(value, str) and value.strip():
                     opts_in[key] = value.strip()
-        elif "application/json" in content_type:
+        else:
             try:
-                body = await request.json()
-            except Exception:
+                body = json.loads(raw)
+            except ValueError:
                 return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
             if not isinstance(body, dict) or not isinstance(body.get("content"), str):
                 return JSONResponse(
@@ -1026,12 +1071,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 value = body.get(key)
                 if value is not None and value != "":
                     opts_in[key] = value
-        else:
-            return JSONResponse(
-                {"error": "Multipart form data or a JSON body is required"}, status_code=400
-            )
 
-        if len(content) > max_transcript_import_bytes:
+        # Measure bytes, not characters: multi-byte text is far larger on disk than len() says.
+        size = len(content) if isinstance(content, bytes | bytearray) else len(content.encode("utf-8"))
+        if size > max_transcript_import_bytes:
             return too_large
 
         from .services.transcript_import import MissingStartTimeError
@@ -1043,7 +1086,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            from .logging_db import logger as _import_logger
+
+            _import_logger.error("Transcript import failed", {"category": "import", "error": str(exc)})
+            return JSONResponse({"error": "Transcript import failed"}, status_code=500)
         return JSONResponse(result, status_code=200 if result.get("deduped") else 201)
 
     @app.get("/api/meetings/{meeting_id}")

@@ -86,13 +86,14 @@ class Seeder:
         *,
         severity: float = 0.8,
         dimension: str = "hostility",
+        verified: int = 1,
     ) -> None:
         with self.db.engine.begin() as conn:
             conn.execute(
                 text(
                     "INSERT INTO meeting_moments (id, meeting_id, speaker_id, toward_speaker_id, start_ms, end_ms, "
-                    "event_type, valence, dimension, severity, quote, created_at) "
-                    "VALUES (:id, :m, :s, :t, :st, :st, 'evt', :v, :dim, :sev, 'q', 0)"
+                    "event_type, valence, dimension, severity, quote, verified, created_at) "
+                    "VALUES (:id, :m, :s, :t, :st, :st, 'evt', :v, :dim, :sev, 'q', :ver, 0)"
                 ),
                 {
                     "id": self._id("mom"),
@@ -103,6 +104,7 @@ class Seeder:
                     "v": valence,
                     "dim": dimension,
                     "sev": severity,
+                    "ver": verified,
                 },
             )
 
@@ -399,3 +401,53 @@ def test_options_override_config(tmp_path: Path) -> None:
     db = create_db(":memory:")
     svc = InsightsQueryService({"minSamples": 7}, db=db, config_dir=str(tmp_path / "cfg"))
     assert svc.config["minSamples"] == 7
+
+
+# -- trust: ungrounded (verified = 0) moments ------------------------------------------
+
+
+def test_overview_excludes_unverified_moments_by_default(env: Any) -> None:
+    _, seed, svc = env
+    seed.meeting("a", _ms(2026, 1, 10))
+    seed.signal("a", ME, {"hostility": 0.2})
+    seed.moment("a", _ms(2026, 1, 10), ME, ALICE, "good")
+    seed.moment("a", _ms(2026, 1, 10), ME, ALICE, "bad", verified=0)
+    assert svc.overview()["moments"] == {"good": 1, "bad": 0}
+    assert svc.overview(include_unverified=True)["moments"] == {"good": 1, "bad": 1}
+
+
+def test_person_excludes_unverified_moments_by_default(env: Any) -> None:
+    _, seed, svc = env
+    seed.meeting("a", _ms(2026, 1, 10))
+    seed.signal("a", ALICE, {"hostility": 0.2})
+    seed.moment("a", _ms(2026, 1, 10), ALICE, ME, "bad", verified=0)
+    assert svc.person(ALICE)["moments"] == {"good": 0, "bad": 0}
+    assert svc.person(ALICE, include_unverified=True)["moments"] == {"good": 0, "bad": 1}
+
+
+def test_dyad_moment_counts_exclude_unverified(env: Any) -> None:
+    _, seed, svc = env
+    for i in range(3):
+        mid = f"x{i}"
+        seed.meeting(mid, _ms(2026, 1 + i, 3))
+        seed.signal(mid, ME, {})
+        seed.signal(mid, BOB, {})
+        seed.moment(mid, _ms(2026, 1 + i, 3), BOB, ME, "bad", verified=0)
+        seed.moment(mid, _ms(2026, 1 + i, 3), BOB, ME, "good")
+
+    def totals(out: dict[str, Any]) -> tuple[int, int]:
+        d = next(x for x in out["dyads"] if x["fromSpeakerId"] == BOB and x["toSpeakerId"] == ME)
+        return d["moments"]["good"], d["moments"]["bad"]
+
+    assert totals(svc.dyads(me_id=ME)) == (3, 0)
+    assert totals(svc.dyads(me_id=ME, include_unverified=True)) == (3, 3)
+
+
+def test_meeting_shows_unverified_moments_flagged(env: Any) -> None:
+    _, seed, svc = env
+    seed.meeting("a", _ms(2026, 1, 10))
+    seed.moment("a", _ms(2026, 1, 10), ME, ALICE, "good")
+    seed.moment("a", _ms(2026, 1, 11), ME, ALICE, "bad", verified=0)
+    out = svc.meeting("a")
+    assert out is not None
+    assert sorted(m["verified"] for m in out["moments"]) == [False, True]

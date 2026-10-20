@@ -30,24 +30,33 @@ SYNTHETIC_MS_PER_WORD = 400
 # Segment duration used for the final timed segment, which has no successor.
 _MIN_SYNTHETIC_MS = SYNTHETIC_MS_PER_WORD
 _MAX_SPEAKER_NAME_CHARS = 60
+# Header regexes cap the name span (a name over _MAX_SPEAKER_NAME_CHARS is rejected anyway) and keep
+# every quantifier unambiguous, so a long unbroken line cannot trigger quadratic backtracking.
+_NAME_SPAN = _MAX_SPEAKER_NAME_CHARS * 2
 
 _TS = r"(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?"
 _CUE_RE = re.compile(rf"(?P<start>{_TS})\s*-->\s*(?P<end>{_TS})")
 _SRT_TIMING_RE = re.compile(r"\d{1,2}:\d{2}:\d{2},\d{1,3}\s*-->")
 _VTT_TIMING_RE = re.compile(r"(?:\d{1,2}:)?\d{1,2}:\d{2}\.\d{1,3}\s*-->")
-_VOICE_RE = re.compile(r"<v(?:\.[^\s>]*)*\s+([^>]+)>", re.IGNORECASE)
-_TAG_RE = re.compile(r"</?[^>\n]+>")
-_SPEAKER_PREFIX_RE = re.compile(r"^(?P<name>[^\W\d_][^:\n]*?)\s*:\s+(?P<text>\S.*)$")
+# Class members exclude "<" (and "." inside the class chain) so neither pattern can rescan a long
+# run of the same character from every start position.
+_VOICE_RE = re.compile(r"<v(?:\.[^\s>.<]*)*\s+([^<>]+)>", re.IGNORECASE)
+_TAG_RE = re.compile(r"</?[^<>\n]+>")
+_SPEAKER_PREFIX_RE = re.compile(rf"^(?P<name>[^\W\d_][^:\n]{{0,{_NAME_SPAN}}}):\s+(?P<text>\S.*)$")
 
 _TEXT_TS = r"\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?"
 # "[HH:MM:SS] Name: text"
-_BRACKET_TS_RE = re.compile(rf"^\[(?P<ts>{_TEXT_TS})\]\s*(?P<name>[^:\n]+?)\s*:\s*(?P<text>.*)$")
+_BRACKET_TS_RE = re.compile(
+    rf"^\[(?P<ts>{_TEXT_TS})\]\s*(?P<name>[^:\s][^:\n]{{0,{_NAME_SPAN}}}):\s*(?P<text>.*)$"
+)
 # "Name (HH:MM:SS): text"
-_PAREN_TS_RE = re.compile(rf"^(?P<name>[^()\n:]+?)\s*\((?P<ts>{_TEXT_TS})\)\s*:\s*(?P<text>.*)$")
+_PAREN_TS_RE = re.compile(
+    rf"^(?P<name>[^()\n:\s][^()\n:]{{0,{_NAME_SPAN}}})\((?P<ts>{_TEXT_TS})\)\s*:\s*(?P<text>.*)$"
+)
 # Zoom .txt: "[Name] HH:MM:SS" with the text on following lines
 _ZOOM_HEADER_RE = re.compile(rf"^\[(?P<name>[^\]\n]+)\]\s+(?P<ts>{_TEXT_TS})\s*$")
 # "Name: text"
-_PLAIN_RE = re.compile(r"^(?P<name>[^\W\d_][^:\n]*?)\s*:\s*(?P<text>\S.*)$")
+_PLAIN_RE = re.compile(rf"^(?P<name>[^\W\d_][^:\n]{{0,{_NAME_SPAN}}}):\s*(?P<text>\S.*)$")
 
 _ZOOM_FILENAME_RE = re.compile(r"zoom|GMT\d{8}-\d{6}", re.IGNORECASE)
 _ZOOM_GMT_RE = re.compile(r"GMT(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})")
@@ -114,7 +123,7 @@ def _synthetic_duration(text: str) -> int:
 def _split_speaker(text: str) -> tuple[str, str]:
     """Split ``"Name: text"`` into ``(name, text)``; unlabeled text is ``Unknown``."""
     m = _SPEAKER_PREFIX_RE.match(text)
-    if m and len(m.group("name")) <= _MAX_SPEAKER_NAME_CHARS and "//" not in m.group("name"):
+    if m and len(m.group("name").strip()) <= _MAX_SPEAKER_NAME_CHARS and "//" not in m.group("name"):
         return m.group("name").strip(), m.group("text").strip()
     return UNKNOWN_SPEAKER, text.strip()
 
@@ -248,7 +257,7 @@ def _match_header(line: str) -> tuple[str, int | None, str, bool] | None:
     if m:
         return m.group("name").strip(), _ts_to_ms(m.group("ts")), m.group("text").strip(), False
     m = _PLAIN_RE.match(stripped)
-    if m and len(m.group("name")) <= _MAX_SPEAKER_NAME_CHARS and "//" not in m.group("name"):
+    if m and len(m.group("name").strip()) <= _MAX_SPEAKER_NAME_CHARS and "//" not in m.group("name"):
         return m.group("name").strip(), None, m.group("text").strip(), False
     return None
 

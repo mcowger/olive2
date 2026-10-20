@@ -192,6 +192,19 @@ def test_find_events_and_playbook_use_llm_service(env: Env, monkeypatch: pytest.
     assert seen["playbook"] == ALICE
 
 
+def test_find_events_limit_is_clamped(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[int] = []
+
+    async def find(self: Any, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        seen.append(limit)
+        return []
+
+    monkeypatch.setattr(llm_query.InsightsLlmService, "find_events", find)
+    _mcp_call(env.client, "find_insight_events", {"query": "x", "limit": 10**9})
+    _mcp_call(env.client, "find_insight_events", {"query": "x", "limit": -5})
+    assert seen == [llm_query.MAX_FIND_EVENTS_LIMIT, 1]
+
+
 def test_tools_error_when_insights_disabled(tmp_path: Path, disabled: None) -> None:
     e = Env(tmp_path, mcpWriteEnabled=True)
     e.seed()

@@ -6168,6 +6168,11 @@
             ],
             "default": null,
             "title": "Identitysource"
+          },
+          "verified": {
+            "default": true,
+            "title": "Verified",
+            "type": "boolean"
           }
         },
         "required": [

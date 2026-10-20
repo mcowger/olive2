@@ -293,14 +293,17 @@ class InsightsQueryService:
             return [_Sample(r) for r in conn.execute(text(sql), params).mappings().all()]
 
     def _load_moments(
-        self, frm: int | None, to: int | None, tag: str | None
+        self, frm: int | None, to: int | None, tag: str | None, include_unverified: bool = False
     ) -> list[dict[str, Any]]:
+        """Moments in scope. Ungrounded (``verified = 0``) moments are excluded unless asked for."""
         scope, params = _scope_sql(frm, to, tag)
+        if not include_unverified:
+            scope += " AND mo.verified = 1"
         sql = (
             "SELECT mo.id, mo.meeting_id, m.start_time AS meeting_start, mo.speaker_id, mo.speaker_label, "
             "mo.toward_speaker_id, mo.toward_label, mo.start_ms, mo.end_ms, mo.event_type, mo.valence, "
             "mo.framework, mo.dimension, mo.severity, mo.quote, mo.rationale, mo.guidance, "
-            "mo.identity_source, mo.identity_confidence "
+            "mo.identity_source, mo.identity_confidence, mo.verified "
             "FROM meeting_moments mo JOIN meetings m ON m.id = mo.meeting_id "
             "WHERE 1 = 1" + scope + " ORDER BY mo.start_ms, mo.id"
         )
@@ -332,6 +335,7 @@ class InsightsQueryService:
             "rationale": m["rationale"],
             "guidance": m["guidance"],
             "identitySource": m["identity_source"],
+            "verified": bool(m["verified"]),
         }
 
     def _coverage(self, frm: int | None, to: int | None, tag: str | None) -> dict[str, int]:
@@ -434,6 +438,7 @@ class InsightsQueryService:
         speaker_id: str | None = None,
         tag: str | None = None,
         bucket: str = "month",
+        include_unverified: bool = False,
     ) -> dict[str, Any]:
         """Corpus-level series by dimension, top outliers, good/bad counts, and coverage."""
         bucket_key(0, bucket)  # validate early
@@ -455,7 +460,7 @@ class InsightsQueryService:
             outliers.extend(found)
         outliers.sort(key=lambda o: (-abs(o["z"]), o["startMs"]))
 
-        moments = self._load_moments(frm_ms, to_ms, tag)
+        moments = self._load_moments(frm_ms, to_ms, tag, include_unverified)
         if speaker_id is not None:
             moments = [m for m in moments if m["speaker_id"] == speaker_id and self._moment_attributed(m)]
 
@@ -480,6 +485,7 @@ class InsightsQueryService:
         frm: int | str | None = None,
         to: int | str | None = None,
         bucket: str = "month",
+        include_unverified: bool = False,
     ) -> dict[str, Any]:
         """One speaker over time: series, own-baseline outliers (meetings and weeks), linked meetings."""
         bucket_key(0, bucket)
@@ -527,7 +533,11 @@ class InsightsQueryService:
             "otherShare": _round(max(0.0, 1.0 - named - voice)) if total else 0.0,
         }
 
-        moments = [m for m in self._load_moments(frm_ms, to_ms, None) if m["speaker_id"] == speaker_id]
+        moments = [
+            m
+            for m in self._load_moments(frm_ms, to_ms, None, include_unverified)
+            if m["speaker_id"] == speaker_id
+        ]
         moments = [m for m in moments if self._moment_attributed(m)]
 
         return {
@@ -569,7 +579,7 @@ class InsightsQueryService:
                     "SELECT mo.id, mo.meeting_id, m.start_time AS meeting_start, mo.speaker_id, mo.speaker_label, "
                     "mo.toward_speaker_id, mo.toward_label, mo.start_ms, mo.end_ms, mo.event_type, mo.valence, "
                     "mo.framework, mo.dimension, mo.severity, mo.quote, mo.rationale, mo.guidance, "
-                    "mo.identity_source, mo.identity_confidence "
+                    "mo.identity_source, mo.identity_confidence, mo.verified "
                     "FROM meeting_moments mo JOIN meetings m ON m.id = mo.meeting_id "
                     "WHERE mo.meeting_id = :id ORDER BY mo.start_ms, mo.id"
                 ),
@@ -623,6 +633,7 @@ class InsightsQueryService:
         frm: int | str | None = None,
         to: int | str | None = None,
         bucket: str = "month",
+        include_unverified: bool = False,
     ) -> dict[str, Any]:
         """Per ordered pair (me->X and X->me): bucketed tone series, trend, and supporting meetings.
 
@@ -654,7 +665,11 @@ class InsightsQueryService:
         for mid, sid in rows:
             present[mid].add(sid)
 
-        moments = [m for m in self._load_moments(frm_ms, to_ms, None) if self._moment_attributed(m)]
+        moments = [
+            m
+            for m in self._load_moments(frm_ms, to_ms, None, include_unverified)
+            if self._moment_attributed(m)
+        ]
         by_edge: dict[tuple[str, str, str], list[Mapping[str, Any]]] = defaultdict(list)  # (from, to, meeting)
         for m in moments:
             if m["toward_speaker_id"]:

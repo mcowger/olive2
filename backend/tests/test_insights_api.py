@@ -87,8 +87,8 @@ class Env:
     def moment(self, n: int, mid: str, start: int, sid: str, toward: str, valence: str) -> None:
         self.run(
             "INSERT INTO meeting_moments (id, meeting_id, speaker_id, toward_speaker_id, start_ms, end_ms, "
-            "event_type, valence, dimension, severity, quote, created_at) "
-            "VALUES (:id, :m, :s, :t, :st, :st, 'evt', :v, 'hostility', 0.8, 'q', 0)",
+            "event_type, valence, dimension, severity, quote, verified, created_at) "
+            "VALUES (:id, :m, :s, :t, :st, :st, 'evt', :v, 'hostility', 0.8, 'q', 1, 0)",
             {"id": f"mom-{n}", "m": mid, "s": sid, "t": toward, "st": start, "v": valence},
         )
 
@@ -480,6 +480,67 @@ def test_import_too_large_413(tmp_path: Path, enabled: None) -> None:
     assert res.status_code == 413
     big_form = e.client.post("/api/transcripts/import", files={"file": ("big.txt", b"x" * 500, "text/plain")})
     assert big_form.status_code == 413
+
+
+def test_import_multibyte_json_over_byte_cap_413(tmp_path: Path, enabled: None) -> None:
+    e = Env(tmp_path, maxTranscriptImportBytes=1000)
+    content = "é" * 600  # 600 characters but 1200 bytes
+    res = e.client.post("/api/transcripts/import", json={"content": content, "filename": "big.txt"})
+    assert res.status_code == 413
+
+
+def test_import_chunked_body_without_content_length_413(tmp_path: Path, enabled: None) -> None:
+    e = Env(tmp_path, maxTranscriptImportBytes=1000)
+
+    def chunks() -> Any:
+        for _ in range(200):
+            yield b"x" * 1024
+
+    json_res = e.client.post(
+        "/api/transcripts/import", content=chunks(), headers={"content-type": "application/json"}
+    )
+    assert json_res.status_code == 413
+    multi = e.client.post(
+        "/api/transcripts/import",
+        content=chunks(),
+        headers={"content-type": "multipart/form-data; boundary=zzz"},
+    )
+    assert multi.status_code == 413
+
+
+def test_import_huge_digit_start_time_400(tmp_path: Path, enabled: None) -> None:
+    e = Env(tmp_path)
+    res = e.client.post(
+        "/api/transcripts/import",
+        json={"content": ZOOM_VTT, "filename": ZOOM_NAME, "startTime": "9" * 400},
+    )
+    assert res.status_code == 400
+
+
+def test_import_internal_error_not_leaked_500(tmp_path: Path, enabled: None) -> None:
+    class Boom:
+        async def import_transcript(self, opts: Any) -> Any:
+            raise RuntimeError("secret internal detail /var/db")
+
+    e = Env(tmp_path, transcriptImportService=Boom())
+    res = e.client.post("/api/transcripts/import", json={"content": ZOOM_VTT, "filename": ZOOM_NAME})
+    assert res.status_code == 500
+    assert "secret" not in res.text
+
+
+def test_insights_find_limit_is_clamped(
+    tmp_path: Path, enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[int] = []
+
+    async def find(self: Any, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        seen.append(limit)
+        return []
+
+    monkeypatch.setattr(llm_query.InsightsLlmService, "find_events", find)
+    e = Env(tmp_path)
+    assert e.client.get("/api/insights/find", params={"q": "x", "limit": 10**9}).status_code == 200
+    assert seen == [llm_query.MAX_FIND_EVENTS_LIMIT]
 
 
 def test_import_bearer_token(tmp_path: Path, enabled: None) -> None:
