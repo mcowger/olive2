@@ -85,6 +85,7 @@ class TaskExecutionContext:
     now_fn: Callable[[], int] | None = None
     workflow_id: str | None = None
     has_live_caller: bool = True
+    stall_watch: Any = None  # _ProgressStallWatch supervising this task, when installed
 
 
 _TASK_CONTEXTS: dict[str, TaskExecutionContext] = {}
@@ -123,6 +124,17 @@ def _close_owned_pipeline(task_id: str) -> None:
             {"category": "transcription", "taskId": task_id, "error": str(exc)},
         )
     ctx.pipeline = None
+
+
+async def _close_owned_pipeline_async(task_id: str) -> None:
+    """Run :func:`_close_owned_pipeline` off the event loop.
+
+    Engine teardown is synchronous and can touch the process-wide diarize lock, which
+    another meeting holds for the length of a native inference call. Doing that on the
+    loop would stall watchdogs and cancellation, so it runs in a worker thread (the
+    diarizer additionally bounds its own lock wait).
+    """
+    await asyncio.to_thread(_close_owned_pipeline, task_id)
 
 
 def get_task_context(task_id: str) -> TaskExecutionContext | None:
@@ -372,7 +384,22 @@ class _ProgressStallWatch:
         self.event = asyncio.Event()
         self._last = time.monotonic()
         self._active = False
+        self._running: set[str] = set()  # concurrent children currently executing
+        self.tripped = False  # True only when the stall timeout fired (not on cancel())
         self._task: asyncio.Task[None] | None = None
+
+    def child_started(self, name: str) -> None:
+        """A child stage began executing (it left its queue): arm and reset the clock."""
+        self._running.add(name)
+        self.progress()
+
+    def child_finished(self, name: str) -> None:
+        """A child stage ended. With none left running the job is only waiting (e.g. ASR
+        queued behind another meeting after embedding finished), so pause enforcement
+        rather than leave the watch armed by the finished child's last progress."""
+        self._running.discard(name)
+        if not self._running:
+            self._active = False
 
     def progress(self) -> None:
         """A real stage made progress — (re)arm and reset the clock."""
@@ -388,6 +415,7 @@ class _ProgressStallWatch:
         while not self.event.is_set():
             await asyncio.sleep(interval)
             if self._active and (time.monotonic() - self._last) > self.timeout:
+                self.tripped = True
                 self.event.set()
                 return
 
@@ -401,6 +429,84 @@ class _ProgressStallWatch:
             self._task = None
 
 
+def _install_stall_watch(ctx: TaskExecutionContext, timeout: float) -> _ProgressStallWatch:
+    """Attach a stall watch to ``ctx``: every progress event stamps it.
+
+    Shared by the live-caller driver (``run_staged_local_transcription``) and the
+    recovery path (a workflow DBOS resumed after a restart), so both enforce the
+    same stall policy. Enforcement begins only after the first stamp.
+    """
+    stall = _ProgressStallWatch(timeout)
+    caller_on_progress = ctx.on_progress
+
+    def _stamped_on_progress(update: dict[str, Any]) -> Any:
+        # "queued" markers (pre-enqueue + between-stage sub-queue waits) are NOT
+        # progress: they pause the guard so a backlog is never mistaken for a wedge.
+        if update.get("stage") == "queued":
+            stall.waiting()
+        else:
+            stall.progress()
+        if callable(caller_on_progress):
+            return caller_on_progress(update)
+        return None
+
+    ctx.on_progress = _stamped_on_progress
+    ctx.stall_watch = stall
+    return stall
+
+
+def _active_child_workflow_ids(parent_wf_id: str) -> set[str]:
+    """IDs of still-active DBOS child workflows enqueued by ``parent_wf_id``.
+
+    Native stages (decode/diarize/embed/ASR/align) run as independently enqueued
+    CHILD workflows, so cancelling the parent alone leaves a hung child pending and
+    holding its stage-queue slot. Scoped to this one pipeline run (its own parent id),
+    never the whole meeting.
+    """
+    dbos_path = get_existing_dbos_sqlite_path(
+        config_dir=_RECOVERY_CONFIG_DIR, meetings_dir=_RECOVERY_MEETINGS_DIR
+    )
+    if dbos_path is None or not dbos_path.exists():
+        return set()
+    out: set[str] = set()
+    try:
+        with sqlite3.connect(str(dbos_path), timeout=1.0) as sconn:
+            rows = sconn.execute(
+                """
+                SELECT workflow_uuid FROM workflow_status
+                WHERE parent_workflow_id = ? AND status IN ('PENDING', 'ENQUEUED', 'DELAYED')
+                """,
+                (parent_wf_id,),
+            ).fetchall()
+        out = {str(r[0]) for r in rows if r[0]}
+    except Exception as exc:
+        logger.warn(
+            "Failed to list child workflows of stalled transcription",
+            {"category": "transcription", "workflowId": parent_wf_id, "error": str(exc)},
+        )
+    return out
+
+
+async def _cancel_stalled_workflow(wf_id: str) -> None:
+    """Cancel a stalled pipeline workflow AND its outstanding child stage workflows."""
+    try:
+        await DBOS.cancel_workflow_async(wf_id)
+    except Exception as exc:
+        logger.warn(
+            "Failed to cancel stalled transcription workflow",
+            {"category": "transcription", "workflowId": wf_id, "error": str(exc)},
+        )
+    child_ids = await asyncio.to_thread(_active_child_workflow_ids, wf_id)
+    for child_id in sorted(child_ids):
+        try:
+            await DBOS.cancel_workflow_async(child_id)
+        except Exception as exc:
+            logger.warn(
+                "Failed to cancel stalled transcription child workflow",
+                {"category": "transcription", "workflowId": child_id, "error": str(exc)},
+            )
+
+
 def _update_stage_run(
     task_id: str,
     stage: str,
@@ -408,6 +514,14 @@ def _update_stage_run(
     error: str | None = None,
 ) -> None:
     ctx = _TASK_CONTEXTS.get(task_id)
+    watch = ctx.stall_watch if ctx is not None else None
+    if isinstance(watch, _ProgressStallWatch):
+        # Track each concurrent child (embed + ASR run in parallel) so a child that is
+        # still queued, or already finished, never counts as a running one.
+        if status == "running":
+            watch.child_started(stage)
+        else:
+            watch.child_finished(stage)
     if ctx is None or ctx.db is None or not ctx.meeting_id:
         return
     now_ms = ctx.now_fn() if callable(ctx.now_fn) else int(time.time() * 1000)
@@ -1228,10 +1342,46 @@ async def step_align_and_finalize(
         raise
 
 
+def _start_recovery_supervision(
+    task_id: str, payload: dict[str, Any]
+) -> tuple[_ProgressStallWatch | None, asyncio.Task[None] | None]:
+    """Stall supervision for a workflow resumed without a live caller."""
+    ctx = _TASK_CONTEXTS.get(task_id)
+    if ctx is None:
+        return None, None
+    stall = _install_stall_watch(ctx, _resolve_stall_timeout(payload))
+    wf_id = ctx.workflow_id
+
+    async def _supervise() -> None:
+        await stall.event.wait()
+        if not stall.tripped or is_shutting_down():
+            return
+        logger.warn(
+            "Recovered transcription stalled; cancelling to free its worker slot",
+            {"category": "transcription", "workflowId": wf_id, "timeoutSec": stall.timeout},
+        )
+        if wf_id:
+            await _cancel_stalled_workflow(wf_id)
+
+    stall.start()
+    return stall, asyncio.create_task(_supervise())
+
+
 @DBOS.workflow()
 async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _run_local_transcription(payload)
+
+
+async def _run_local_transcription(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = str(payload["taskId"])
     adopted = _ensure_task_context(payload)
+    recovery_watch: _ProgressStallWatch | None = None
+    recovery_supervisor: asyncio.Task[None] | None = None
+    if adopted:
+        # No live caller (DBOS resumed us after a restart), so nothing else supervises
+        # this run: install the same stall watch run_staged_local_transcription uses,
+        # or a recovered hung stage would pin its queue slot forever.
+        recovery_watch, recovery_supervisor = _start_recovery_supervision(task_id, payload)
     try:
         _check_aborted(task_id)
 
@@ -1322,9 +1472,13 @@ async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any
             if inspect.isawaitable(comp_res):
                 await comp_res
         # Pipeline work is done (all stages returned) — release sessions now.
-        _close_owned_pipeline(task_id)
+        await _close_owned_pipeline_async(task_id)
         return res_dict
     finally:
+        if recovery_watch is not None:
+            recovery_watch.cancel()
+        if recovery_supervisor is not None:
+            recovery_supervisor.cancel()
         if adopted:
             unregister_task_context(task_id)
 
@@ -1677,21 +1831,7 @@ async def run_staged_local_transcription(
     # it has wedged — cancel it so its worker-concurrency slot frees instead of
     # blocking the whole queue. Every progress event stamps the watch; enforcement
     # begins only after the first stamp (a job still queued emits nothing yet).
-    stall = _ProgressStallWatch(_resolve_stall_timeout(options))
-    _caller_on_progress = ctx.on_progress
-
-    def _stamped_on_progress(update: dict[str, Any]) -> Any:
-        # "queued" markers (pre-enqueue + between-stage sub-queue waits) are NOT
-        # progress — they pause the guard so a backlog is never mistaken for a wedge.
-        if update.get("stage") == "queued":
-            stall.waiting()
-        else:
-            stall.progress()
-        if callable(_caller_on_progress):
-            return _caller_on_progress(update)
-        return None
-
-    ctx.on_progress = _stamped_on_progress
+    stall = _install_stall_watch(ctx, _resolve_stall_timeout(options))
 
     raw_enrolled = options.get("enrolledSpeakers") or options.get("enrolled_speakers") or []
     serialized_enrolled = [s.model_dump() if isinstance(s, EnrolledSpeaker) else s for s in raw_enrolled]
@@ -1712,6 +1852,8 @@ async def run_staged_local_transcription(
         "wholeFileAsr": bool(options.get("wholeFileAsr") or options.get("whole_file_asr")),
         "pipelineOptions": pipeline_options or {},
         "cleanupWav": temp_work_dir is None,
+        # Carried in the payload so a recovered workflow enforces the same window.
+        "stallTimeoutSec": stall.timeout,
     }
 
     abort_Event = asyncio.Event()
@@ -1772,13 +1914,7 @@ async def run_staged_local_transcription(
             # use; that one job's threads leak until the process restarts, which is
             # bounded and far better than stalling the whole queue for hours.
             if not is_shutting_down():
-                try:
-                    await DBOS.cancel_workflow_async(wf_id)
-                except Exception as exc:
-                    logger.warn(
-                        "Failed to cancel stalled transcription workflow",
-                        {"category": "transcription", "workflowId": wf_id, "error": str(exc)},
-                    )
+                await _cancel_stalled_workflow(wf_id)
             result_task.cancel()
             raise RuntimeError(
                 f"Transcription stalled: no stage progress for {stall.timeout:.0f}s; worker slot freed"
@@ -1789,7 +1925,7 @@ async def run_staged_local_transcription(
         res_dict = await result_task
         # Completed — stages have returned, so releasing the pipeline's sessions now
         # is safe (no thread is still inside one).
-        _close_owned_pipeline(task_id)
+        await _close_owned_pipeline_async(task_id)
         return LocalTranscriptionResult(
             transcript=Transcript.model_validate(res_dict["transcript"]),
             discoveredSpeakers=[

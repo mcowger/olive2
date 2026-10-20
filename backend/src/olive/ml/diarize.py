@@ -27,6 +27,9 @@ os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 _DIARIZE_LOCK = threading.Lock()
+# release() must never wait indefinitely behind another meeting's native inference
+# (which holds _DIARIZE_LOCK for the whole pipeline call and may hang).
+_RELEASE_LOCK_TIMEOUT_SEC = 5.0
 _CACHED_PIPELINE: Any = None
 MAX_VOICEPRINT_TURNS_PER_CLUSTER = 8
 MAX_VOICEPRINT_TURN_SECONDS = 12.0
@@ -681,11 +684,23 @@ class PyannoteSpeakerDiarizer:
 
     def release(self, clear_cache: bool = False) -> None:
         global _CACHED_PIPELINE
-        with _DIARIZE_LOCK:
+        if not _DIARIZE_LOCK.acquire(timeout=_RELEASE_LOCK_TIMEOUT_SEC):
+            # Another pipeline is inside native inference. Drop only our own reference
+            # (an atomic attribute store) and leave the shared cache for a later
+            # release rather than blocking teardown behind a possibly hung call.
+            self._pipeline = None
+            logger.warn(
+                "Diarizer release skipped shared-cache clear: diarize lock busy",
+                {"category": "transcription", "timeoutSec": _RELEASE_LOCK_TIMEOUT_SEC},
+            )
+            return
+        try:
             self._pipeline = None
             if clear_cache:
                 _CACHED_PIPELINE = None
                 gc.collect()
+        finally:
+            _DIARIZE_LOCK.release()
 
 
 SherpaSpeakerDiarizer = PyannoteSpeakerDiarizer

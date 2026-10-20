@@ -358,3 +358,188 @@ def test_lifespan_launches_dbos_at_startup(monkeypatch: pytest.MonkeyPatch) -> N
         pass
 
     assert len(calls) == 1, "lifespan must launch DBOS exactly once at startup"
+
+
+# --- Review follow-ups: teardown off-loop, per-child stall tracking, child cancel ----
+
+
+async def test_close_owned_pipeline_async_does_not_block_event_loop() -> None:
+    # Finding 1: teardown can block on the global diarize lock held by another
+    # meeting's native inference. It must run off the loop so the loop stays live.
+    import threading
+
+    started = threading.Event()
+    release_it = threading.Event()
+
+    class _BlockingEngine(_SpyEngine):
+        def release(self, clear_cache: bool = False) -> None:
+            started.set()
+            release_it.wait(5)
+            super().release(clear_cache)
+
+    pipe = LocalTranscriptionPipeline(
+        {},
+        custom_diarizer=_BlockingEngine(),
+        custom_extractor=_SpyEngine(),
+        custom_asr_engine=_SpyEngine(),
+        custom_aligner=_SpyEngine(),
+    )
+    tw.register_task_context(tw.TaskExecutionContext(task_id="rob-async", owns_pipeline=True, pipeline=pipe))
+    try:
+        closer = asyncio.create_task(tw._close_owned_pipeline_async("rob-async"))
+        ticks = 0
+        while not started.is_set() or ticks < 5:
+            await asyncio.sleep(0.01)  # would never return if close() ran on the loop
+            ticks += 1
+        assert not closer.done()  # still blocked in the worker thread, loop is alive
+        release_it.set()
+        await asyncio.wait_for(closer, 2)
+    finally:
+        release_it.set()
+        tw.unregister_task_context("rob-async")
+
+
+def test_diarizer_release_does_not_wait_forever_on_busy_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+    from types import SimpleNamespace as NS
+
+    from olive.ml import diarize
+
+    monkeypatch.setattr(diarize, "_RELEASE_LOCK_TIMEOUT_SEC", 0.1)
+    d = diarize.PyannoteSpeakerDiarizer(embedding_extractor=NS())
+    d._pipeline = object()
+    holder_ready = threading.Event()
+    holder_go = threading.Event()
+
+    def _hold() -> None:
+        with diarize._DIARIZE_LOCK:
+            holder_ready.set()
+            holder_go.wait(5)
+
+    t = threading.Thread(target=_hold)
+    t.start()
+    try:
+        holder_ready.wait(2)
+        t0 = time.monotonic()
+        d.release(clear_cache=True)  # another meeting is mid-inference
+        assert time.monotonic() - t0 < 2
+        assert d._pipeline is None
+    finally:
+        holder_go.set()
+        t.join()
+
+
+async def test_stall_watch_pauses_when_embed_done_and_asr_still_queued() -> None:
+    # Finding 2: embed and ASR run concurrently. Embed finishing must not leave the
+    # watch armed while ASR waits behind another meeting.
+    w = tw._ProgressStallWatch(0.2)
+    w.start()
+    w.child_started("speaker_embed")
+    w.progress()
+    w.child_finished("speaker_embed")  # ASR child has not started: still queued
+    await asyncio.sleep(0.6)
+    assert not w.event.is_set()
+    w.child_started("asr")  # ASR finally runs, then goes silent -> must trip
+    await asyncio.sleep(0.6)
+    assert w.event.is_set()
+    w.cancel()
+
+
+async def test_stall_watch_stays_armed_while_a_sibling_child_runs() -> None:
+    w = tw._ProgressStallWatch(0.2)
+    w.start()
+    w.child_started("speaker_embed")
+    w.child_started("asr")
+    w.child_finished("speaker_embed")  # asr still running and silent -> still enforced
+    await asyncio.sleep(0.6)
+    assert w.event.is_set()
+    w.cancel()
+
+
+def test_update_stage_run_feeds_stall_watch() -> None:
+    ctx = tw.TaskExecutionContext(task_id="rob-stagehook")
+    w = tw._ProgressStallWatch(60)
+    ctx.stall_watch = w
+    tw.register_task_context(ctx)
+    try:
+        tw._update_stage_run("rob-stagehook", tw.STAGE_ASR, "running")
+        assert w._running == {tw.STAGE_ASR} and w._active
+        tw._update_stage_run("rob-stagehook", tw.STAGE_ASR, "done")
+        assert not w._running and not w._active
+    finally:
+        tw.unregister_task_context("rob-stagehook")
+
+
+async def test_stall_cancels_outstanding_child_workflows(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Finding 3: a hung native stage is a CHILD workflow; cancelling only the parent
+    # leaves it pinning its stage-queue slot.
+    cancelled: list[str] = []
+
+    async def _fake_cancel(wf_id: str) -> None:
+        cancelled.append(wf_id)
+
+    monkeypatch.setattr(tw, "DBOS", SimpleNamespace(cancel_workflow_async=_fake_cancel))
+    monkeypatch.setattr(
+        tw, "_active_child_workflow_ids", lambda parent: {"child-asr", "child-embed"} if parent == "p1" else set()
+    )
+    await tw._cancel_stalled_workflow("p1")
+    assert cancelled[0] == "p1"
+    assert set(cancelled[1:]) == {"child-asr", "child-embed"}
+
+
+def test_active_child_workflow_ids_scoped_to_parent(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sqlite3
+
+    db = tmp_path / "dbos.sqlite"
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE workflow_status (workflow_uuid TEXT, parent_workflow_id TEXT, status TEXT)")
+        c.executemany(
+            "INSERT INTO workflow_status VALUES (?,?,?)",
+            [
+                ("c1", "p1", "PENDING"),
+                ("c2", "p1", "ENQUEUED"),
+                ("c3", "p1", "SUCCESS"),
+                ("other", "p2", "PENDING"),
+            ],
+        )
+    monkeypatch.setattr(tw, "get_existing_dbos_sqlite_path", lambda **k: db)
+    assert tw._active_child_workflow_ids("p1") == {"c1", "c2"}
+
+
+async def test_recovered_driver_installs_stall_supervision(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Finding 4: a workflow DBOS resumes with no live caller must still be supervised.
+    cancelled: list[str] = []
+
+    async def _fake_cancel(wf_id: str) -> None:
+        cancelled.append(wf_id)
+
+    class _HangingHandle:
+        async def get_result(self, polling_interval_sec: float = 0.05) -> dict[str, object]:
+            await asyncio.sleep(0.02)
+            ctx = tw.get_task_context("rob-recovered")
+            assert ctx is not None and ctx.stall_watch is not None
+            await tw._emit_progress("rob-recovered", {"stage": "decoding", "percent": 5})
+            await asyncio.sleep(30)
+            return {}
+
+    async def _enqueue(queue: object, fn: object, *a: object, **k: object) -> _HangingHandle:
+        return _HangingHandle()
+
+    monkeypatch.setattr(
+        tw,
+        "DBOS",
+        SimpleNamespace(
+            enqueue_workflow_async=_enqueue, cancel_workflow_async=_fake_cancel, workflow_id="wf-recovered"
+        ),
+    )
+    monkeypatch.setattr(tw, "is_shutting_down", lambda: False)
+    monkeypatch.setattr(tw, "_active_child_workflow_ids", lambda parent: {"kid"})
+    payload = {"taskId": "rob-recovered", "meetingId": None, "stallTimeoutSec": 0.3}
+    task = asyncio.create_task(tw._run_local_transcription(payload))
+    await asyncio.sleep(1.0)
+    assert cancelled[:1] == ["wf-recovered"] and "kid" in cancelled  # parent + child cancelled
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+    assert tw.get_task_context("rob-recovered") is None  # supervision torn down
