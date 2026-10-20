@@ -261,6 +261,24 @@ class SpeakerAliasModel(Base):
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class MeetingSpeakerNameProposalModel(Base):
+    """A proposed real name for a generic speaker label, awaiting confirmation (Olive Insights)."""
+
+    __tablename__ = "meeting_speaker_name_proposals"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    meeting_id: Mapped[str] = mapped_column(Text, ForeignKey("meetings.id"), nullable=False)
+    speaker_label: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_turn_idx: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 Index("idx_meetings_start_time", MeetingModel.start_time.desc())
 Index("idx_recordings_meeting", RecordingModel.meeting_id)
 Index(
@@ -287,6 +305,13 @@ Index("idx_moments_speaker", MeetingMomentModel.speaker_id, MeetingMomentModel.s
 Index("idx_moments_event", MeetingMomentModel.event_type)
 Index("idx_moments_start", MeetingMomentModel.start_ms)
 Index("idx_speaker_aliases", SpeakerAliasModel.alias_norm, SpeakerAliasModel.speaker_id, unique=True)
+Index(
+    "idx_name_proposals_label",
+    MeetingSpeakerNameProposalModel.meeting_id,
+    MeetingSpeakerNameProposalModel.speaker_label,
+    unique=True,
+)
+Index("idx_name_proposals_meeting", MeetingSpeakerNameProposalModel.meeting_id)
 
 __all__ = [
     "ArtifactModel",
@@ -296,6 +321,7 @@ __all__ = [
     "MeetingModel",
     "MeetingMomentModel",
     "MeetingSpeakerModel",
+    "MeetingSpeakerNameProposalModel",
     "MeetingSpeakerSignalModel",
     "PlaudIngestStateModel",
     "PlaudDeletedFileModel",

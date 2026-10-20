@@ -190,6 +190,19 @@ CREATE_TABLE_STATEMENTS: list[str] = [
     confirmed INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
   )""",
+    """CREATE TABLE IF NOT EXISTS meeting_speaker_name_proposals (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id),
+    speaker_label TEXT NOT NULL,
+    proposed_name TEXT,
+    confidence REAL,
+    evidence_quote TEXT,
+    evidence_turn_idx INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    model TEXT,
+    provider TEXT,
+    created_at INTEGER NOT NULL
+  )""",
     """CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL,
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
@@ -217,6 +230,8 @@ CREATE_INDEX_STATEMENTS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_moments_event ON meeting_moments(event_type)",
     "CREATE INDEX IF NOT EXISTS idx_moments_start ON meeting_moments(start_ms)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_speaker_aliases ON speaker_aliases(alias_norm, speaker_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_name_proposals_label ON meeting_speaker_name_proposals(meeting_id, speaker_label)",
+    "CREATE INDEX IF NOT EXISTS idx_name_proposals_meeting ON meeting_speaker_name_proposals(meeting_id)",
 ]
 
 ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
