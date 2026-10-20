@@ -52,16 +52,18 @@ async def backfill(
     to: int | None = None,
     force: bool = False,
     limit: int | None = None,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     """Enqueue analysis for meetings with a primary transcript.
 
     Uses the registered queue hook (DBOS ``insights`` queue, deduplicated per meeting), so it is
     a no-op returning ``queued=0`` when no hook is registered. Meetings whose current transcript
     already has signals for the current prompt version are skipped unless ``force``. ``frm``/``to``
-    bound ``start_time`` (ms, inclusive); ``limit`` caps how many are queued.
+    bound ``start_time`` (ms, inclusive); ``limit`` caps how many are queued. With ``dry_run`` nothing
+    is enqueued: ``queued`` reports how many meetings would be, and no queue hook is required.
     """
     hook = extract.get_enqueue_hook()
-    if hook is None:
+    if hook is None and not dry_run:
         logger.info("Insights backfill skipped: no queue hook registered", {"category": "insights"})
         return {"queued": 0, "skipped": 0}
 
@@ -94,6 +96,10 @@ async def backfill(
         if not force and _is_current(db, meeting, str(folder), prompt_version):
             skipped += 1
             continue
+        if dry_run:
+            queued += 1
+            continue
+        assert hook is not None
         res = hook(meeting["id"])
         if inspect.isawaitable(res):
             res = await res

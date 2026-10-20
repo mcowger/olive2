@@ -78,6 +78,11 @@ def test_mcp_is_available_without_token_on_loopback_and_lists_tools(tmp_path: Pa
         "list_active_transcriptions",
         "get_summary_status",
         "plaud_status",
+        "insights_overview",
+        "person_insights",
+        "meeting_signals",
+        "find_insight_events",
+        "person_playbook",
     ]
     handle.engine.dispose()
 

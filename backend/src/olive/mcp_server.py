@@ -17,6 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from .layout import meeting_paths
+from .services.insights import backfill as insights_backfill
+from .services.insights.query import _to_ms
 from .services.meetings import (
     delete_meeting,
     get_meeting,
@@ -427,9 +429,107 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
         "description": "Get Plaud Cloud sync status (connected, lastPollAt, pcsPending).",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "insights_overview",
+        "description": (
+            "Olive Insights corpus overview: per-dimension series, top outliers, good/bad moment counts, "
+            "and analysis coverage. Optionally scoped by date range (epoch ms or ISO date), speaker, or tag. "
+            "Errors when Insights is disabled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": {"type": "string", "description": "Start bound (epoch ms or ISO-8601 date)"},
+                "to": {"type": "string", "description": "End bound (epoch ms or ISO-8601 date)"},
+                "speakerId": {"type": "string", "description": "Limit to one speaker ID"},
+                "tag": {"type": "string", "description": "Limit to meetings carrying this tag"},
+            },
+        },
+    },
+    {
+        "name": "person_insights",
+        "description": (
+            "Olive Insights for one speaker over time: series, own-baseline outliers, and linked meetings. "
+            "Errors when Insights is disabled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["speakerId"],
+            "properties": {
+                "speakerId": {"type": "string", "description": "Speaker ID"},
+                "from": {"type": "string", "description": "Start bound (epoch ms or ISO-8601 date)"},
+                "to": {"type": "string", "description": "End bound (epoch ms or ISO-8601 date)"},
+            },
+        },
+    },
+    {
+        "name": "meeting_signals",
+        "description": (
+            "Olive Insights speaker signals and moments for a single meeting. "
+            "Errors when Insights is disabled or the meeting is unknown."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId"],
+            "properties": {"meetingId": {"type": "string", "description": "Meeting ID"}},
+        },
+    },
+    {
+        "name": "find_insight_events",
+        "description": (
+            "Find notable moments across meetings from a natural-language query (LLM-assisted search "
+            "over Insights events, with transcript context). Errors when Insights is disabled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "description": "What to look for, e.g. 'times Alice interrupted me'"},
+                "limit": {"type": "integer", "default": 5, "description": "Maximum events to return"},
+            },
+        },
+    },
+    {
+        "name": "person_playbook",
+        "description": (
+            "LLM-generated, evidence-grounded playbook for working with one speaker, built from Insights "
+            "moments. Errors when Insights is disabled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["speakerId"],
+            "properties": {"speakerId": {"type": "string", "description": "Speaker ID"}},
+        },
+    },
 ]
 
 MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
+    {
+        "name": "backfill_insights",
+        "description": (
+            "Enqueue Olive Insights analysis for transcribed meetings that lack current signals. "
+            "Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to return the candidate count without enqueuing. "
+            "Errors when Insights is disabled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": {"type": "string", "description": "Only meetings starting at/after this (epoch ms or ISO date)"},
+                "to": {"type": "string", "description": "Only meetings starting at/before this (epoch ms or ISO date)"},
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Re-analyze meetings that already have current signals",
+                },
+                "limit": {"type": "integer", "description": "Maximum meetings to enqueue"},
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the candidate count without enqueuing",
+                },
+            },
+        },
+    },
     {
         "name": "update_speaker",
         "description": (
@@ -998,6 +1098,16 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
 ]
 
 MCP_WRITE_TOOL_NAMES = frozenset(t["name"] for t in MCP_WRITE_TOOLS_SPEC)
+_INSIGHTS_TOOL_NAMES = frozenset(
+    {
+        "insights_overview",
+        "person_insights",
+        "meeting_signals",
+        "find_insight_events",
+        "person_playbook",
+        "backfill_insights",
+    }
+)
 
 
 def get_mcp_tools_spec(*, write_enabled: bool = False) -> list[dict[str, Any]]:
@@ -1682,6 +1792,116 @@ async def _handle_lifecycle_mcp_tools(
     return None
 
 
+async def _handle_insights_mcp_tools(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    db: Engine,
+    meetings_dir: str,
+    insights_service: Any | None,
+    insights_query_service: Any | None,
+    insights_llm_service: Any | None,
+) -> dict[str, Any] | None:
+    """Olive Insights tools; ``None`` when ``tool_name`` is not an Insights tool."""
+    if tool_name not in _INSIGHTS_TOOL_NAMES:
+        return None
+    if insights_service is None:
+        return _error_result("Insights service not available")
+    if not insights_service.is_enabled():
+        return _error_result(
+            "Insights is disabled. Enable it in Settings or set OLIVE_INSIGHTS_ENABLED=1 on the server."
+        )
+
+    def _opt(key: str) -> Any:
+        value = arguments.get(key)
+        return None if value is None or value == "" else value
+
+    if tool_name == "insights_overview":
+        if insights_query_service is None:
+            return _error_result("Insights query service not available")
+        try:
+            res = await asyncio.to_thread(
+                insights_query_service.overview,
+                _opt("from"),
+                _opt("to"),
+                _opt("speakerId"),
+                _opt("tag"),
+            )
+        except ValueError as exc:
+            return _error_result(exc)
+        return _text_result(res)
+
+    if tool_name == "person_insights":
+        speaker_id = str(arguments.get("speakerId") or "")
+        if not speaker_id:
+            return _error_result("speakerId is required")
+        if insights_query_service is None:
+            return _error_result("Insights query service not available")
+        try:
+            res = await asyncio.to_thread(
+                insights_query_service.person, speaker_id, _opt("from"), _opt("to")
+            )
+        except ValueError as exc:
+            return _error_result(exc)
+        return _text_result(res)
+
+    if tool_name == "meeting_signals":
+        meeting_id = str(arguments.get("meetingId") or "")
+        if not meeting_id:
+            return _error_result("meetingId is required")
+        if insights_query_service is None:
+            return _error_result("Insights query service not available")
+        res = await asyncio.to_thread(insights_query_service.meeting, meeting_id)
+        if res is None:
+            return _error_result("Meeting not found")
+        return _text_result(res)
+
+    if tool_name == "find_insight_events":
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return _error_result("query is required")
+        if insights_llm_service is None:
+            return _error_result("Insights LLM service not available")
+        limit = 5
+        if arguments.get("limit") is not None:
+            try:
+                limit = int(arguments["limit"])
+            except (TypeError, ValueError):
+                return _error_result("limit must be an integer")
+        results = await insights_llm_service.find_events(query, limit)
+        return _text_result({"query": query, "results": results})
+
+    if tool_name == "person_playbook":
+        speaker_id = str(arguments.get("speakerId") or "")
+        if not speaker_id:
+            return _error_result("speakerId is required")
+        if insights_llm_service is None:
+            return _error_result("Insights LLM service not available")
+        return _text_result(await insights_llm_service.playbook(speaker_id))
+
+    # backfill_insights
+    try:
+        frm = _to_ms(arguments.get("from"))
+        to = _to_ms(arguments.get("to"))
+        limit = int(arguments["limit"]) if arguments.get("limit") is not None else None
+    except (TypeError, ValueError):
+        return _error_result("Invalid from, to, or limit")
+    dry_run = bool(arguments.get("dryRun"))
+    res = await insights_backfill.backfill(
+        db,
+        meetings_dir,
+        insights_service.config_dir,
+        frm=frm,
+        to=to,
+        force=bool(arguments.get("force")),
+        limit=limit,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        return _text_result({"dryRun": True, "candidates": res["queued"], "skipped": res["skipped"]})
+    return _text_result({"dryRun": False, **res})
+
+
 async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
     tool_name: str,
     arguments: dict[str, Any],
@@ -1695,6 +1915,9 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
     title_service: Any | None = None,
     plaud_poller: Any | None = None,
     template_service: Any | None = None,
+    insights_service: Any | None = None,
+    insights_query_service: Any | None = None,
+    insights_llm_service: Any | None = None,
 ) -> dict[str, Any]:
     try:
         if tool_name in MCP_WRITE_TOOL_NAMES and not is_mcp_write_enabled(write_enabled):
@@ -2449,6 +2672,18 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
         if lc_handled is not None:
             return lc_handled
 
+        in_handled = await _handle_insights_mcp_tools(
+            tool_name,
+            arguments,
+            db=db,
+            meetings_dir=meetings_dir,
+            insights_service=insights_service,
+            insights_query_service=insights_query_service,
+            insights_llm_service=insights_llm_service,
+        )
+        if in_handled is not None:
+            return in_handled
+
         return _error_result(f"Unknown tool: {tool_name}")
     except Exception as exc:
         return _error_result(exc)
@@ -2476,6 +2711,9 @@ async def handle_mcp_request(
     title_service: Any | None = None,
     plaud_poller: Any | None = None,
     template_service: Any | None = None,
+    insights_service: Any | None = None,
+    insights_query_service: Any | None = None,
+    insights_llm_service: Any | None = None,
 ) -> Response:
     resolved_write_enabled = is_mcp_write_enabled(write_enabled)
     # 1. Host / Origin validation when bound to loopback
@@ -2550,6 +2788,9 @@ async def handle_mcp_request(
             title_service=title_service,
             plaud_poller=plaud_poller,
             template_service=template_service,
+            insights_service=insights_service,
+            insights_query_service=insights_query_service,
+            insights_llm_service=insights_llm_service,
         )
         return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": tool_res})
 
