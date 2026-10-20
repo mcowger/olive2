@@ -35,7 +35,7 @@ from ...layout import meeting_paths
 from ...logging_db import logger
 from ...schemas import CamelModel, LlmGenerateResult, TranscriptSegment
 from ...speaker_labels import is_generic_speaker_label
-from ..census import _load_transcript, _recording_duration, _resolve_transcript_row
+from ..census import load_transcript, recording_duration, resolve_transcript_row
 from .chunking import chunk_segments, format_turn
 from .extract import (
     InsightsExtractionError,
@@ -45,42 +45,13 @@ from .extract import (
     normalize_text,
 )
 from .identity import normalize_alias
-from .prompts import load_insights_config, load_insights_prompts
+from .prompts import DEFAULT_PROMPTS, load_insights_config, load_insights_prompts
 from .validate import InsightsValidationError, parse_llm_json
 
-NAMING_SYSTEM_PROMPT = """\
-You are a careful reader of meeting transcripts. Your only job is to work out who the \
-unidentified speakers are, using what the people in the conversation say to and about each \
-other. You never guess a name from a voice, a role, or a topic. You only name a speaker when \
-the words on the page support it, and every name you give is tied to a short verbatim quote \
-copied exactly from a cited turn. When the transcript does not say who someone is, you say so \
-by returning a null name. You reply with a single JSON object and nothing else."""
-
-NAMING_PROMPT = """\
-Meeting: {{title}}
-Known people (use these exact spellings when one matches): {{candidates}}
-Speaker labels to name: {{labels}}
-
-Below is part of a diarized transcript. Each line is "[turn number] Speaker: words". Turn numbers \
-are the identifiers you must cite.
-
-TRANSCRIPT
-{{transcript}}
-END TRANSCRIPT
-
-Task: for EACH speaker label listed above, decide whether the transcript itself reveals the real \
-name of the person behind that label. Good evidence is another speaker addressing that person by \
-name and that person replying, the person introducing themselves, or someone else introducing \
-them. A name that is only mentioned in passing, or that belongs to a third party being talked \
-about, is not evidence. Propose a name only when it is supported; otherwise give null. Prefer a \
-spelling from the known people when one matches, and otherwise use the name exactly as it is \
-spoken. The quote must be copied exactly from the cited turn and must contain the name.
-
-Reply with exactly one JSON object shaped like this, with one entry per label, and nothing else:
-{"proposals": [{"speaker": "Speaker 1", "proposedName": "Name or null", "confidence": 0.0, \
-"evidenceQuote": "verbatim words containing the name", "evidenceTurnIdx": 0}]}"""
-
-#: Keys read from the insights prompts config; the defaults apply until a key is overridden.
+#: Back-compat names; the text lives in ``prompts.DEFAULT_PROMPTS`` so it is seeded to
+#: ``prompts.json``, user-editable, and part of the prompt version.
+NAMING_SYSTEM_PROMPT = DEFAULT_PROMPTS["namingSystemPrompt"]
+NAMING_PROMPT = DEFAULT_PROMPTS["namingPrompt"]
 DEFAULT_NAMING_PROMPTS: dict[str, str] = {
     "namingSystemPrompt": NAMING_SYSTEM_PROMPT,
     "namingPrompt": NAMING_PROMPT,
@@ -316,14 +287,14 @@ class SpeakerNamingService(InsightsService):
             )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
-            artifact = _resolve_transcript_row(conn, dict(meeting))
-            duration_ms = _recording_duration(conn, meeting_id)
+            artifact = resolve_transcript_row(conn, dict(meeting))
+            duration_ms = recording_duration(conn, meeting_id)
         if artifact is None:
             raise ValueError("No transcript found for meeting. Please transcribe the recording first.")
         folder = meeting_paths(
             self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
         ).folder
-        loaded = _load_transcript(Path(folder) / artifact["path"], duration_ms)
+        loaded = load_transcript(Path(folder) / artifact["path"], duration_ms)
         if isinstance(loaded, str):
             raise ValueError(f"Transcript could not be read ({loaded})")
         return meeting, list(loaded[1].segments)

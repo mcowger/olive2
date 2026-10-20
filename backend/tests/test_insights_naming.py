@@ -755,3 +755,17 @@ def test_naming_module_does_not_import_the_ml_stack() -> None:
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
+
+
+def test_naming_uses_public_census_helpers_and_shared_prompt_defaults() -> None:
+    from olive.services import census
+    from olive.services.insights import naming
+    from olive.services.insights.prompts import DEFAULT_PROMPTS
+
+    assert naming.load_transcript is census.load_transcript
+    assert naming.recording_duration is census.recording_duration
+    assert naming.resolve_transcript_row is census.resolve_transcript_row
+    assert naming.DEFAULT_NAMING_PROMPTS == {
+        "namingSystemPrompt": DEFAULT_PROMPTS["namingSystemPrompt"],
+        "namingPrompt": DEFAULT_PROMPTS["namingPrompt"],
+    }

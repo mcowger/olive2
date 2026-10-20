@@ -90,10 +90,44 @@ object shaped like this, and nothing else:
 "framework": "framework:marker or null", "dimension": "name", "severity": "word", \
 "quote": "verbatim words", "rationale": "one sentence", "guidance": "suggestion or null"}]}"""
 
+NAMING_SYSTEM_PROMPT = """\
+You are a careful reader of meeting transcripts. Your only job is to work out who the \
+unidentified speakers are, using what the people in the conversation say to and about each \
+other. You never guess a name from a voice, a role, or a topic. You only name a speaker when \
+the words on the page support it, and every name you give is tied to a short verbatim quote \
+copied exactly from a cited turn. When the transcript does not say who someone is, you say so \
+by returning a null name. You reply with a single JSON object and nothing else."""
+
+NAMING_PROMPT = """\
+Meeting: {{title}}
+Known people (use these exact spellings when one matches): {{candidates}}
+Speaker labels to name: {{labels}}
+
+Below is part of a diarized transcript. Each line is "[turn number] Speaker: words". Turn numbers \
+are the identifiers you must cite.
+
+TRANSCRIPT
+{{transcript}}
+END TRANSCRIPT
+
+Task: for EACH speaker label listed above, decide whether the transcript itself reveals the real \
+name of the person behind that label. Good evidence is another speaker addressing that person by \
+name and that person replying, the person introducing themselves, or someone else introducing \
+them. A name that is only mentioned in passing, or that belongs to a third party being talked \
+about, is not evidence. Propose a name only when it is supported; otherwise give null. Prefer a \
+spelling from the known people when one matches, and otherwise use the name exactly as it is \
+spoken. The quote must be copied exactly from the cited turn and must contain the name.
+
+Reply with exactly one JSON object shaped like this, with one entry per label, and nothing else:
+{"proposals": [{"speaker": "Speaker 1", "proposedName": "Name or null", "confidence": 0.0, \
+"evidenceQuote": "verbatim words containing the name", "evidenceTurnIdx": 0}]}"""
+
 DEFAULT_PROMPTS: dict[str, str] = {
     "systemPrompt": SYSTEM_PROMPT,
     "extractPrompt": EXTRACT_PROMPT,
     "frameworks": FRAMEWORKS,
+    "namingSystemPrompt": NAMING_SYSTEM_PROMPT,
+    "namingPrompt": NAMING_PROMPT,
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -115,7 +149,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allowedHosts": [],
 }
 
-_PROMPT_VERSION_KEYS = ("systemPrompt", "extractPrompt", "frameworks")
+_PROMPT_VERSION_KEYS = (
+    "systemPrompt",
+    "extractPrompt",
+    "frameworks",
+    "namingSystemPrompt",
+    "namingPrompt",
+)
 
 
 def _insights_dir(config_dir: str) -> Path:

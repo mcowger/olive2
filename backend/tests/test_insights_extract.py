@@ -29,6 +29,7 @@ from olive.services.insights.extract import (
     merge_chunks,
 )
 from olive.services.insights.identity import resolve_labels
+from olive.services.insights.naming import SpeakerNamingService
 from olive.services.insights.prompts import (
     DEFAULT_CONFIG,
     DEFAULT_PROMPTS,
@@ -449,6 +450,122 @@ def test_resolve_labels_names_aliases_and_generic() -> None:
     assert ids[""].speaker_id is None
 
 
+CONFIRMED_SEGMENTS = [
+    {"startMs": 0, "endMs": 5000, "speaker": "Alice", "text": "Welcome everyone, Vineet, over to you."},
+    {
+        "startMs": 5200,
+        "endMs": 12000,
+        "speaker": "Speaker 2",
+        "text": "You always sabotage this project and I am sick of it.",
+    },
+    {"startMs": 12500, "endMs": 14000, "speaker": "Speaker 3", "text": "Okay, moving on."},
+]
+
+
+def _naming(handle, meetings_dir: str, config_dir: str) -> SpeakerNamingService:
+    return SpeakerNamingService(
+        db=handle.engine, meetings_dir=meetings_dir, config_dir=config_dir, llm_service=None
+    )
+
+
+def _confirmed_response() -> str:
+    return _chunk_json(
+        [{"speaker": "Speaker 2", "dimensions": {"hostility": "high"}, "stance": "aggressive"}],
+        [
+            {
+                "speaker": "Speaker 2",
+                "toward": "Alice",
+                "turnStartIdx": 1,
+                "eventType": "accusation",
+                "valence": "bad",
+                "dimension": "hostility",
+                "severity": "high",
+                "quote": "You always sabotage this project",
+                "rationale": "Global blame.",
+            }
+        ],
+    )
+
+
+def test_resolve_labels_honors_confirmed_name_proposals(tmp_path: Path) -> None:
+    handle, meetings_dir, config_dir, _llm, _service = _make_service(tmp_path, lambda n, o: "{}")
+    mid = _seed(handle.engine, meetings_dir, CONFIRMED_SEGMENTS, people=("Alice",))
+    with handle.engine.connect() as conn:
+        before = resolve_labels(conn, mid, ["Speaker 2", "Speaker 3"])
+    assert before["Speaker 2"].speaker_id is None
+
+    applied = _naming(handle, meetings_dir, config_dir).apply_confirmations(mid, {"Speaker 2": "Vineet"})
+    with handle.engine.connect() as conn:
+        after = resolve_labels(conn, mid, ["Speaker 2", "Speaker 3"])
+    assert after["Speaker 2"].speaker_id == applied["Speaker 2"]["speakerId"]
+    assert after["Speaker 2"].identity_source == "name"
+    assert after["Speaker 3"].speaker_id is None  # unconfirmed generic label stays unresolved
+    handle.engine.dispose()
+
+
+def test_resolve_labels_ignores_unconfirmed_and_other_meeting_proposals(tmp_path: Path) -> None:
+    handle, meetings_dir, _config_dir, _llm, _service = _make_service(tmp_path, lambda n, o: "{}")
+    mid = _seed(handle.engine, meetings_dir, CONFIRMED_SEGMENTS, people=("Alice", "Vineet"))
+    other = _seed(
+        handle.engine, meetings_dir, CONFIRMED_SEGMENTS, meeting_id="meeting-ins-2", people=("Vineet",)
+    )
+    with handle.engine.begin() as conn:
+        for pid, meeting, status in (("p1", mid, "pending"), ("p2", other, "confirmed")):
+            conn.execute(
+                text(
+                    "INSERT INTO meeting_speaker_name_proposals (id, meeting_id, speaker_label, proposed_name, "
+                    "status, created_at) VALUES (:i, :m, 'Speaker 2', 'Vineet', :s, 1)"
+                ),
+                {"i": pid, "m": meeting, "s": status},
+            )
+    with handle.engine.connect() as conn:
+        assert resolve_labels(conn, mid, ["Speaker 2"])["Speaker 2"].speaker_id is None
+        assert resolve_labels(conn, other, ["Speaker 2"])["Speaker 2"].speaker_id == "spk-vineet"
+    handle.engine.dispose()
+
+
+def test_confirmed_name_does_not_override_a_voiceprint_link(tmp_path: Path) -> None:
+    handle, meetings_dir, config_dir, _llm, _service = _make_service(tmp_path, lambda n, o: "{}")
+    mid = _seed(handle.engine, meetings_dir, CONFIRMED_SEGMENTS, people=("Alice", "Vineet"))
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE meeting_speakers SET identity_source = 'voiceprint', identity_confidence = 0.95 "
+                "WHERE meeting_id = :m AND speaker_id = 'spk-vineet'"
+            ),
+            {"m": mid},
+        )
+    _naming(handle, meetings_dir, config_dir).apply_confirmations(mid, {"Speaker 2": "Vineet"})
+    with handle.engine.connect() as conn:
+        hit = resolve_labels(conn, mid, ["Speaker 2"])["Speaker 2"]
+    assert (hit.speaker_id, hit.identity_source) == ("spk-vineet", "voiceprint")
+    assert hit.identity_confidence == pytest.approx(0.95)
+    handle.engine.dispose()
+
+
+async def test_extraction_attributes_confirmed_label_to_the_confirmed_speaker(tmp_path: Path) -> None:
+    handle, meetings_dir, config_dir, _llm, service = _make_service(
+        tmp_path, lambda n, o: _confirmed_response()
+    )
+    (Path(config_dir) / "settings.json").write_text(
+        json.dumps({"insightsProvider": "openai", "insightsModel": "pinned-model"})
+    )
+    mid = _seed(handle.engine, meetings_dir, CONFIRMED_SEGMENTS, people=("Alice",))
+    applied = _naming(handle, meetings_dir, config_dir).apply_confirmations(mid, {"Speaker 2": "Vineet"})
+    vineet = applied["Speaker 2"]["speakerId"]
+
+    assert (await service.analyze_meeting(mid))["status"] == "done"
+
+    signals = {r["speaker_label"]: r for r in _rows(handle.engine, "SELECT * FROM meeting_speaker_signals")}
+    assert signals["Speaker 2"]["speaker_id"] == vineet
+    assert signals["Speaker 2"]["identity_source"] == "name"
+    assert signals["Speaker 3"]["speaker_id"] is None
+    moment = _rows(handle.engine, "SELECT * FROM meeting_moments")[0]
+    assert (moment["speaker_id"], moment["speaker_label"]) == (vineet, "Speaker 2")
+    assert moment["toward_speaker_id"] == "spk-alice"
+    handle.engine.dispose()
+
+
 # --------------------------------------------------------------------------- prompts / config
 
 
@@ -466,6 +583,24 @@ def test_prompts_seed_on_first_use_and_user_keys_override_per_key(tmp_path: Path
     assert over["frameworks"] == DEFAULT_PROMPTS["frameworks"]
     assert compute_prompt_version(over) != compute_prompt_version(DEFAULT_PROMPTS)
     assert compute_prompt_version(over) == compute_prompt_version(dict(over))
+
+
+def test_naming_prompts_are_seeded_versioned_and_user_overridable(tmp_path: Path) -> None:
+    assert {"namingPrompt", "namingSystemPrompt"} <= set(DEFAULT_PROMPTS)
+    config_dir = tmp_path / "cfg"
+    seeded = load_insights_prompts(str(config_dir))
+    assert "{{labels}}" in seeded["namingPrompt"] and seeded["namingSystemPrompt"]
+    on_disk = json.loads((config_dir / "insights" / "prompts.json").read_text())
+    assert on_disk["namingPrompt"] == DEFAULT_PROMPTS["namingPrompt"]
+
+    for key in ("namingPrompt", "namingSystemPrompt"):
+        tweaked = {**DEFAULT_PROMPTS, key: "changed"}
+        assert compute_prompt_version(tweaked) != compute_prompt_version(DEFAULT_PROMPTS)
+
+    (config_dir / "insights" / "prompts.json").write_text(json.dumps({"namingPrompt": "Mine {{labels}}"}))
+    over = load_insights_prompts(str(config_dir))
+    assert over["namingPrompt"] == "Mine {{labels}}"
+    assert over["namingSystemPrompt"] == DEFAULT_PROMPTS["namingSystemPrompt"]
 
 
 def test_malformed_prompt_and_config_files_fall_back_to_defaults(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from olive.db import create_db
 from olive.layout import meeting_paths
+from olive.services import census as census_mod
 from olive.services.census import compute_census, format_census_report, open_readonly_engine
 
 MINUTE_MS = 60_000
@@ -303,3 +304,14 @@ def test_format_census_report_includes_headline_figures(db: Any, corpus: Path) -
     assert "2026-01" in report
     assert "<5m" in report
     assert "7 segments" in report
+
+
+def test_transcript_read_helpers_are_public_with_private_aliases(tmp_path: Path) -> None:
+    for name in ("load_transcript", "recording_duration", "resolve_transcript_row"):
+        assert getattr(census_mod, name) is getattr(census_mod, f"_{name}")
+        assert name in census_mod.__all__
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps({"segments": [{"startMs": 0, "endMs": 1000, "speaker": "A", "text": "hi"}]}))
+    loaded = census_mod.load_transcript(path, 1000)
+    assert not isinstance(loaded, str)
+    assert isinstance(census_mod.load_transcript(tmp_path / "missing.json", None), str)

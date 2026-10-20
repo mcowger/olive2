@@ -71,8 +71,8 @@ def compute_census(db: Engine | DbHandle, meetings_dir: str | Path) -> dict[str,
                     {"mid": meeting["id"]},
                 ).first()
             )
-            meeting["transcript"] = _resolve_transcript_row(conn, meeting)
-            meeting["duration_ms"] = _recording_duration(conn, meeting["id"])
+            meeting["transcript"] = resolve_transcript_row(conn, meeting)
+            meeting["duration_ms"] = recording_duration(conn, meeting["id"])
 
     root = Path(meetings_dir)
     shapes: Counter[str] = Counter()
@@ -105,7 +105,7 @@ def compute_census(db: Engine | DbHandle, meetings_dir: str | Path) -> dict[str,
             folder = meeting_paths(
                 str(root), int(meeting["start_time"]), meeting["title"], meeting["id"]
             ).folder
-            loaded_result = _load_transcript(Path(folder) / artifact["path"], meeting["duration_ms"])
+            loaded_result = load_transcript(Path(folder) / artifact["path"], meeting["duration_ms"])
             if isinstance(loaded_result, str):
                 failures[loaded_result] += 1
             else:
@@ -210,7 +210,7 @@ ORDER BY start_time
 """
 
 
-def _resolve_transcript_row(conn: Any, meeting: dict[str, Any]) -> dict[str, Any] | None:
+def resolve_transcript_row(conn: Any, meeting: dict[str, Any]) -> dict[str, Any] | None:
     """Primary transcript JSON artifact, else the latest transcript JSON artifact."""
     primary_id = meeting["primary_transcript_artifact_id"]
     if primary_id:
@@ -241,7 +241,7 @@ def _resolve_transcript_row(conn: Any, meeting: dict[str, Any]) -> dict[str, Any
     return dict(row) if row else None
 
 
-def _recording_duration(conn: Any, meeting_id: str) -> int | None:
+def recording_duration(conn: Any, meeting_id: str) -> int | None:
     value = conn.execute(
         text("SELECT duration_ms FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
         {"mid": meeting_id},
@@ -249,7 +249,7 @@ def _recording_duration(conn: Any, meeting_id: str) -> int | None:
     return int(value) if value else None
 
 
-def _load_transcript(path: Path, duration_ms: int | None) -> tuple[str, Transcript] | str:
+def load_transcript(path: Path, duration_ms: int | None) -> tuple[str, Transcript] | str:
     """Return ``(shape, transcript)`` or a failure reason for one transcript file."""
     if not path.is_file():
         return "missing_file"
@@ -345,9 +345,17 @@ def _format_share(share: float | None) -> str:
     return "n/a" if share is None else f"{share:.1%}"
 
 
+# Backward-compatible private names for the transcript-read helpers made public above.
+_resolve_transcript_row = resolve_transcript_row
+_recording_duration = recording_duration
+_load_transcript = load_transcript
+
 __all__ = [
     "DURATION_BUCKETS",
     "compute_census",
     "format_census_report",
+    "load_transcript",
     "open_readonly_engine",
+    "recording_duration",
+    "resolve_transcript_row",
 ]
