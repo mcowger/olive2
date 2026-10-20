@@ -470,6 +470,10 @@ def split_meeting(db: Engine, meetings_dir: str, meeting_id: str, split_ms: int)
         conn.execute(
             text("DELETE FROM artifacts WHERE meeting_id = :id AND kind = 'summary'"), {"id": meeting_id}
         )
+        # Insights signals and moments describe the whole meeting; they are stale
+        # after the cut and are recomputed per part.
+        for tbl in ("meeting_speaker_signals", "meeting_moments"):
+            conn.execute(text(f"DELETE FROM {tbl} WHERE meeting_id = :id"), {"id": meeting_id})
         conn.execute(
             text(
                 "UPDATE meetings SET end_time = :end, primary_summary_artifact_id = NULL, "

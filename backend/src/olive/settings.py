@@ -120,6 +120,7 @@ class AppConfig(BaseModel):
     speechmaticsApiKey: str = Field(default="")
     assemblyaiApiKey: str = Field(default="")
     museApiKey: str = Field(default="")
+    insightsEnabled: bool = Field(default=False)
 
     @field_validator("localAsrModel", mode="before")
     @classmethod

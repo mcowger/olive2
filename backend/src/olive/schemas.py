@@ -7,10 +7,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-MeetingSource = Literal["plaud", "upload", "ios-shortcut"]
+MeetingSource = Literal["plaud", "upload", "ios-shortcut", "import"]
 MeetingStatus = Literal["pending", "processing", "ready", "error", "duplicate"]
 AudioStatus = Literal["ready", "retrieving", "missing"]
-ArtifactKind = Literal["transcript", "summary"]
+ArtifactKind = Literal["transcript", "summary", "signals"]
 ArtifactFormat = Literal["md", "txt", "json", "srt"]
 StageRunStatus = Literal["pending", "running", "done", "error", "cancelled"]
 LogLevel = Literal["debug", "info", "warn", "error"]

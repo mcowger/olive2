@@ -1,8 +1,8 @@
 import type { components } from "./schema.d.ts";
 
-export type MeetingSource = "plaud" | "upload" | "ios-shortcut";
+export type MeetingSource = "plaud" | "upload" | "ios-shortcut" | "import";
 export type MeetingStatus = "pending" | "processing" | "ready" | "error" | "duplicate";
-export type ArtifactKind = "transcript" | "summary";
+export type ArtifactKind = "transcript" | "summary" | "signals";
 export type ArtifactFormat = "md" | "txt" | "json" | "srt";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type ChatMessageRole = "user" | "assistant";

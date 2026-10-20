@@ -288,6 +288,38 @@ def _select_candidate_samples(
     ]
 
 
+def _repoint_insights_speaker(conn: Any, source_speaker_id: str, target_speaker_id: str) -> None:
+    """Move Insights rows (signals, moments, aliases) from a merged-away speaker to the survivor."""
+    params = {"src": source_speaker_id, "dst": target_speaker_id}
+    conn.execute(
+        text("UPDATE meeting_speaker_signals SET speaker_id = :dst WHERE speaker_id = :src"), params
+    )
+    conn.execute(text("UPDATE meeting_moments SET speaker_id = :dst WHERE speaker_id = :src"), params)
+    conn.execute(
+        text("UPDATE meeting_moments SET toward_speaker_id = :dst WHERE toward_speaker_id = :src"), params
+    )
+    # (alias_norm, speaker_id) is unique: skip aliases the survivor already has, drop the leftovers.
+    conn.execute(text("UPDATE OR IGNORE speaker_aliases SET speaker_id = :dst WHERE speaker_id = :src"), params)
+    conn.execute(text("DELETE FROM speaker_aliases WHERE speaker_id = :src"), {"src": source_speaker_id})
+
+
+def _detach_insights_speaker(conn: Any, speaker_id: str | None = None) -> None:
+    """NULL Insights references to a speaker (or to every speaker when ``speaker_id`` is None).
+
+    Must run before the ``speakers`` row is deleted so foreign keys are satisfied; the rows
+    themselves are kept (they retain ``speaker_label``) so they can be re-attributed later.
+    """
+    where = "" if speaker_id is None else " WHERE {col} = :sid"
+    params = {} if speaker_id is None else {"sid": speaker_id}
+    for table, col in (
+        ("meeting_speaker_signals", "speaker_id"),
+        ("meeting_moments", "speaker_id"),
+        ("meeting_moments", "toward_speaker_id"),
+        ("speaker_aliases", "speaker_id"),
+    ):
+        conn.execute(text(f"UPDATE {table} SET {col} = NULL" + where.format(col=col)), params)
+
+
 class SpeakerService:
     def __init__(
         self,
@@ -1237,6 +1269,7 @@ class SpeakerService:
             is_placeholder = _is_placeholder_name(sp["name"]) or sp["name"].strip().lower() == normalized_from
             clips = _parse_json_field(sp.get("enrollment_clip_paths"), [])
             if not other_links and (is_placeholder or (not clips and not sp.get("enrolled_at"))):
+                _detach_insights_speaker(conn, sp["id"])
                 conn.execute(text("DELETE FROM speakers WHERE id = :sid"), {"sid": sp["id"]})
 
     def _rename_transcript_label_local_only(
@@ -1576,6 +1609,7 @@ class SpeakerService:
                         )
                         clips = _parse_json_field(sp.get("enrollment_clip_paths"), [])
                         if not other_links and (is_placeholder or (not clips and not sp.get("enrolled_at"))):
+                            _detach_insights_speaker(conn, sp["id"])
                             conn.execute(
                                 text("DELETE FROM speakers WHERE id = :sid"),
                                 {"sid": sp["id"]},
@@ -2130,10 +2164,12 @@ class SpeakerService:
                         "aid": link["evidence_artifact_id"],
                     },
                 )
+            _repoint_insights_speaker(conn, source_speaker_id, target_speaker_id)
             conn.execute(
                 text("DELETE FROM meeting_speakers WHERE speaker_id = :sid"),
                 {"sid": source_speaker_id},
             )
+            _detach_insights_speaker(conn, source_speaker_id)
             conn.execute(
                 text("DELETE FROM speakers WHERE id = :sid"),
                 {"sid": source_speaker_id},
@@ -2456,6 +2492,7 @@ class SpeakerService:
                 text("DELETE FROM meeting_speakers WHERE speaker_id = :id"),
                 {"id": speaker_id},
             )
+            _detach_insights_speaker(conn, speaker_id)
             conn.execute(
                 text("DELETE FROM speakers WHERE id = :id"),
                 {"id": speaker_id},
@@ -2617,6 +2654,7 @@ class SpeakerService:
                     orphan_clips.extend(list(_parse_json_field(r.get("enrollment_clip_paths"), [])))
                 with self.db.begin() as conn:
                     conn.execute(text("DELETE FROM meeting_speakers"))
+                    _detach_insights_speaker(conn)
                     conn.execute(text("DELETE FROM speakers"))
                 for rel in orphan_clips:
                     try:
@@ -2892,6 +2930,7 @@ class SpeakerService:
                 ).first()
                 clips = _parse_json_field(s.get("enrollment_clip_paths"), [])
                 if not links and (is_placeholder or (not clips and not s.get("enrolled_at"))):
+                    _detach_insights_speaker(conn, s["id"])
                     conn.execute(
                         text("DELETE FROM speakers WHERE id = :id"),
                         {"id": s["id"]},
