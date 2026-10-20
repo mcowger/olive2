@@ -935,3 +935,26 @@ async def test_enqueue_analyze_respects_enabled_flag_and_hook(tmp_path: Path, mo
     finally:
         insights_extract.set_enqueue_hook(None)
     handle.engine.dispose()
+
+
+def test_parse_segments_accepts_all_stored_shapes() -> None:
+    """Regression: extraction must handle the bare-list transcript shape (the
+    majority of the real corpus), not only the Transcript-object shape."""
+    import json as _json
+
+    import pytest as _pytest
+
+    from olive.services.insights.extract import InsightsService
+
+    seg = {"startMs": 0, "endMs": 1000, "speaker": "Phil", "text": "Hello there.", "words": []}
+    # Bare list of segments (was previously rejected).
+    out_list = InsightsService._parse_segments(_json.dumps([seg]), "json")
+    assert len(out_list) == 1 and out_list[0].speaker == "Phil"
+    # Transcript object.
+    out_obj = InsightsService._parse_segments(_json.dumps({"segments": [seg]}), "json")
+    assert len(out_obj) == 1 and out_obj[0].text == "Hello there."
+    # Non-JSON / unusable input still raises ValueError (mapped to a clear error).
+    with _pytest.raises(ValueError):
+        InsightsService._parse_segments("not json at all", "json")
+    with _pytest.raises(ValueError):
+        InsightsService._parse_segments(_json.dumps([]), "json")

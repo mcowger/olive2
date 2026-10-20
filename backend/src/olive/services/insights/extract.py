@@ -28,7 +28,7 @@ from sqlalchemy.engine import Engine
 from ...db import DbHandle, get_db
 from ...layout import meeting_paths
 from ...logging_db import logger
-from ...schemas import LlmGenerateResult, Transcript, TranscriptSegment
+from ...schemas import LlmGenerateResult, TranscriptSegment
 from ...settings import AppConfig, resolve_paths
 from .chunking import chunk_segments, dedup_moments, format_turn
 from .identity import ResolvedIdentity, normalize_alias, resolve_labels
@@ -536,7 +536,17 @@ class InsightsService:
         if fmt != "json":
             raise ValueError("Insights requires a JSON transcript with speaker-attributed segments")
         try:
-            segments = Transcript.model_validate(json.loads(raw)).segments
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Transcript is not valid JSON: {exc}") from exc
+        # Stored transcripts come in several shapes: a Transcript object, a bare
+        # list of segments, and a raw Plaud list. Normalize them all the same way
+        # the rest of the app does (census mirrors services.transcription here).
+        try:
+            from ..census import _parse_transcript
+
+            _shape, transcript = _parse_transcript(data, None)
+            segments = transcript.segments
         except ValueError as exc:
             raise ValueError(f"Transcript is not valid speaker-segment JSON: {exc}") from exc
         if not segments:
