@@ -401,6 +401,13 @@ def test_import_json_201_then_dedup_200(tmp_path: Path, enabled: None) -> None:
     assert again.status_code == 200
     assert again.json()["deduped"] is True
     assert again.json()["meetingId"] == first.json()["meetingId"]
+    # The UI reads warnings/unmappedNames/speakers without checking `deduped` first, so a
+    # deduplicated import has the same complete shape as a fresh one.
+    assert set(again.json()) == set(first.json())
+    assert again.json()["warnings"] == [] and again.json()["unmappedNames"] == []
+    assert again.json()["format"] == first.json()["format"]
+    assert again.json()["segmentCount"] == first.json()["segmentCount"]
+    assert again.json()["startTime"] == first.json()["startTime"]
     multipart_again = _import_multipart(e.client)
     assert multipart_again.status_code == 200
 

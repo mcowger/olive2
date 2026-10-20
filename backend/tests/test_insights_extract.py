@@ -410,6 +410,104 @@ def test_merge_chunks_weights_dimensions_by_talk_time() -> None:
 # --------------------------------------------------------------------------- identity
 
 
+def test_resolve_labels_keeps_voiceprint_provenance_when_matched_via_alias() -> None:
+    handle = create_db(":memory:")
+    now = 1_700_000_000_000
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO meetings (id, title, start_time, end_time, source, status, tags, created_at, updated_at) "
+                "VALUES ('m', 't', :n, :n, 'upload', 'ready', '[]', :n, :n)"
+            ),
+            {"n": now},
+        )
+        conn.execute(
+            text("INSERT INTO speakers (id, name, created_at) VALUES ('s-rob', 'Robert Smith', :n)"),
+            {"n": now},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO meeting_speakers (meeting_id, speaker_id, identity_source, identity_confidence) "
+                "VALUES ('m', 's-rob', 'voiceprint', 0.87)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO speaker_aliases (id, alias_norm, speaker_id, kind, confirmed, created_at) "
+                "VALUES ('a1', 'bobby', 's-rob', 'nickname', 1, :n)"
+            ),
+            {"n": now},
+        )
+    with handle.engine.connect() as conn:
+        ids = resolve_labels(conn, "m", ["Bobby"])
+    assert ids["Bobby"].speaker_id == "s-rob"
+    assert ids["Bobby"].identity_source == "voiceprint"
+    assert ids["Bobby"].identity_confidence == pytest.approx(0.87)
+    handle.engine.dispose()
+
+
+def test_resolve_labels_leaves_ambiguous_names_and_aliases_unresolved() -> None:
+    handle = create_db(":memory:")
+    now = 1_700_000_000_000
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO meetings (id, title, start_time, end_time, source, status, tags, created_at, updated_at) "
+                "VALUES ('m', 't', :n, :n, 'upload', 'ready', '[]', :n, :n)"
+            ),
+            {"n": now},
+        )
+        for sid, name in (("s-a1", "Sam"), ("s-a2", "sam"), ("s-b", "Beth"), ("s-c", "Carol")):
+            conn.execute(
+                text("INSERT INTO speakers (id, name, created_at) VALUES (:i, :n, :now)"),
+                {"i": sid, "n": name, "now": now},
+            )
+        for sid in ("s-a1", "s-a2"):
+            conn.execute(
+                text(
+                    "INSERT INTO meeting_speakers (meeting_id, speaker_id, identity_source) VALUES ('m', :s, 'name')"
+                ),
+                {"s": sid},
+            )
+        for aid, sid in (("a1", "s-b"), ("a2", "s-c")):
+            conn.execute(
+                text(
+                    "INSERT INTO speaker_aliases (id, alias_norm, speaker_id, kind, confirmed, created_at) "
+                    "VALUES (:a, 'bc', :s, 'nickname', 1, :n)"
+                ),
+                {"a": aid, "s": sid, "n": now},
+            )
+    with handle.engine.connect() as conn:
+        ids = resolve_labels(conn, "m", ["Sam", "BC", "Beth"])
+    assert ids["Sam"].speaker_id is None  # two meeting speakers share the name
+    assert ids["BC"].speaker_id is None  # alias held by two people
+    assert ids["Beth"].speaker_id is None  # not linked to this meeting and no alias of its own
+    handle.engine.dispose()
+
+
+def test_validate_chunk_rejects_objects_that_are_not_extractions() -> None:
+    from olive.services.insights.validate import validate_chunk
+
+    for bad in ('{"error": "I cannot do that"}', "{}", '{"speaker": []}', '{"speakers": "none"}'):
+        with pytest.raises(InsightsValidationError):
+            validate_chunk(bad)
+    empty = validate_chunk('{"speakers": [], "moments": []}')  # validly empty is still fine
+    assert empty.speakers == [] and empty.moments == []
+    assert validate_chunk('{"moments": []}').speakers == []
+
+
+async def test_malformed_extraction_object_fails_the_stage_run_not_silent_empty(tmp_path: Path) -> None:
+    handle, meetings_dir, _, llm, service = _make_service(tmp_path, lambda n, o: '{"unexpected": true}')
+    meeting_id = _seed(handle.engine, meetings_dir)
+    with pytest.raises(InsightsExtractionError):
+        await service.analyze_meeting(meeting_id)
+    assert len(llm.calls) == 2  # one repair re-ask, then fail
+    run = _rows(handle.engine, "SELECT status FROM stage_runs WHERE stage = 'insights_analyze'")
+    assert run[0]["status"] == "error"
+    assert _rows(handle.engine, "SELECT id FROM meeting_speaker_signals") == []
+    handle.engine.dispose()
+
+
 def test_resolve_labels_names_aliases_and_generic() -> None:
     handle = create_db(":memory:")
     now = 1_700_000_000_000

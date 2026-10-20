@@ -100,7 +100,7 @@ async def backfill(
             queued += 1
             continue
         assert hook is not None
-        res = hook(meeting["id"])
+        res = hook(meeting["id"], force=True) if force else hook(meeting["id"])
         if inspect.isawaitable(res):
             res = await res
         if res:

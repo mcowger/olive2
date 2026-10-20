@@ -53,40 +53,168 @@ def test_insights_queue_registered_with_single_worker() -> None:
 class _StubInsights:
     def __init__(self) -> None:
         self.analyzed: list[str] = []
+        self.forced: list[bool] = []
 
     async def analyze_meeting(self, meeting_id: str, *, force: bool = False) -> dict[str, Any]:
         self.analyzed.append(meeting_id)
+        self.forced.append(force)
         return {"status": "done"}
 
 
-async def test_hook_enqueues_on_insights_queue_with_dedup_and_workflow_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+class _FakeDbosEnqueue:
+    """Stands in for ``DBOS.enqueue_workflow_async`` and records what would be queued."""
 
-    async def fake_enqueue(*args: Any, **kwargs: Any) -> Any:
-        calls.append((args, kwargs))
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((args, kwargs))
         return object()
 
-    monkeypatch.setattr(wf, "enqueue_stage_job", fake_enqueue)
-    stub = _StubInsights()
-    wf.configure_insights_queue(stub)
 
+@pytest.fixture
+def dbos_calls(monkeypatch: pytest.MonkeyPatch) -> _FakeDbosEnqueue:
+    fake = _FakeDbosEnqueue()
+    monkeypatch.setattr(wf.DBOS, "enqueue_workflow_async", fake)
+
+    async def launched(**_kw: Any) -> str:
+        return "sqlite://"
+
+    monkeypatch.setattr(wf, "ensure_dbos_launched_async", launched)
+    return fake
+
+
+async def test_hook_enqueues_registered_function_with_meeting_id_and_force(
+    dbos_calls: _FakeDbosEnqueue,
+) -> None:
+    wf.configure_insights_queue(_StubInsights())
+    hook = insights_extract.get_enqueue_hook()
+    assert hook is not None
+    assert await hook("m-1") is True
+    assert await hook("m-2", force=True) is True
+
+    (first_args, _), (second_args, _) = dbos_calls.calls
+    # DBOS recovers a workflow by its registered function name, so a closure/lambda would be lost on
+    # restart: the queued callable is a module-level function and the payload is plain data.
+    assert first_args[0] == "insights"
+    assert first_args[1] is wf.step_analyze_insights_meeting
+    assert first_args[1].__name__ != "<lambda>"
+    assert first_args[2:] == ("m-1", False)
+    assert second_args[2:] == ("m-2", True)
+
+
+async def test_hook_uses_dedup_and_workflow_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str | None, str | None]] = []
+
+    class _Ctx:
+        def __init__(self, tag: str, value: str | None) -> None:
+            self.tag, self.value = tag, value
+
+        def __enter__(self) -> None:
+            seen.append((self.tag, self.value))
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(wf, "SetWorkflowID", lambda wid: _Ctx("wid", wid))
+    monkeypatch.setattr(
+        wf, "SetEnqueueOptions", lambda deduplication_id=None: _Ctx("dedup", deduplication_id)
+    )
+    monkeypatch.setattr(wf.DBOS, "enqueue_workflow_async", _FakeDbosEnqueue())
+
+    async def launched(**_kw: Any) -> str:
+        return "sqlite://"
+
+    monkeypatch.setattr(wf, "ensure_dbos_launched_async", launched)
+    wf.configure_insights_queue(_StubInsights())
     hook = insights_extract.get_enqueue_hook()
     assert hook is not None
     assert await hook("m-1") is True
 
-    ((args, kwargs),) = calls
-    assert args[0] == "insights"
-    assert kwargs["deduplication_id"] == "insights:m-1"
-    assert kwargs["workflow_id"].startswith("insights:m-1:")
-    assert len(kwargs["workflow_id"].split(":")[2]) == 8
-    assert kwargs["label"] == "insights:analyze"
-    assert kwargs["meeting_id"] == "m-1"
+    values = dict(seen)
+    assert values["dedup"] == "insights:m-1"
+    assert values["wid"] is not None and values["wid"].startswith("insights:m-1:")
+    assert len(values["wid"].split(":")[2]) == 8
 
-    # The queued callable runs the analysis for exactly that meeting.
-    await args[1]()
-    assert stub.analyzed == ["m-1"]
+
+async def test_recovered_job_rebuilds_service_and_forwards_force() -> None:
+    stub = _StubInsights()
+    wf.configure_insights_queue(stub)
+    res = await wf.step_analyze_insights_meeting("m-9", True)
+    assert res == {"status": "done"}
+    assert stub.analyzed == ["m-9"]
+    assert stub.forced == [True]
+
+    # After a restart no live service is registered: the factory rebuilds it.
+    wf._INSIGHTS_SERVICE = None
+    rebuilt = _StubInsights()
+    wf.configure_insights_service_factory(lambda: rebuilt)
+    try:
+        await wf.step_analyze_insights_meeting("m-10")
+    finally:
+        wf.configure_insights_service_factory(None)
+    assert rebuilt.analyzed == ["m-10"] and rebuilt.forced == [False]
+
+
+async def test_enqueue_launches_dbos_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[str] = []
+
+    async def launched(**_kw: Any) -> str:
+        order.append("launch")
+        return "sqlite://"
+
+    async def enqueue(*_a: Any, **_k: Any) -> Any:
+        order.append("enqueue")
+        return object()
+
+    monkeypatch.setattr(wf, "ensure_dbos_launched_async", launched)
+    monkeypatch.setattr(wf.DBOS, "enqueue_workflow_async", enqueue)
+    wf.configure_insights_queue(_StubInsights())
+    hook = insights_extract.get_enqueue_hook()
+    assert hook is not None
+    assert await hook("m-1") is True
+    assert order == ["launch", "enqueue"]
+
+
+@pytest.mark.parametrize("failing", ["launch", "enqueue"])
+async def test_enqueue_failures_are_handled_not_raised(monkeypatch: pytest.MonkeyPatch, failing: str) -> None:
+    async def launched(**_kw: Any) -> str:
+        if failing == "launch":
+            raise RuntimeError("DBOS failed to launch")
+        return "sqlite://"
+
+    async def enqueue(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("No DBOS was created yet")
+
+    monkeypatch.setattr(wf, "ensure_dbos_launched_async", launched)
+    monkeypatch.setattr(wf.DBOS, "enqueue_workflow_async", enqueue)
+    wf.configure_insights_queue(_StubInsights())
+    hook = insights_extract.get_enqueue_hook()
+    assert hook is not None
+    assert await hook("m-1") is False  # reported, never an unhandled exception
+
+
+async def test_enqueue_analyze_threads_force_to_the_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from olive.services.insights.extract import InsightsService
+
+    monkeypatch.setenv("OLIVE_INSIGHTS_ENABLED", "1")
+    got: list[tuple[str, bool]] = []
+
+    async def hook(meeting_id: str, force: bool = False) -> bool:
+        got.append((meeting_id, force))
+        return True
+
+    insights_extract.set_enqueue_hook(hook)
+    handle = create_db(":memory:")
+    svc = InsightsService(
+        db=handle.engine, meetings_dir=str(tmp_path), config_dir=str(tmp_path), llm_service=None
+    )
+    assert await svc.enqueue_analyze("a") is True
+    assert await svc.enqueue_analyze("b", force=True) is True
+    assert got == [("a", False), ("b", True)]
+    handle.engine.dispose()
 
 
 # -- auto-enqueue on finalize -------------------------------------------------
@@ -221,17 +349,26 @@ def _mark_analyzed(handle: Any, config_dir: str, meeting_id: str, raw: str) -> N
         )
 
 
+class _Queued(list[str]):
+    """Meeting ids the backfill hook received, plus the ``force`` flag it got for each."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.forced: list[bool] = []
+
+
 @pytest.fixture
-def backfill_env(tmp_path: Path) -> tuple[Any, str, str, list[str]]:
+def backfill_env(tmp_path: Path) -> tuple[Any, str, str, _Queued]:
     handle = create_db(":memory:")
     meetings_dir = str(tmp_path / "meetings")
     config_dir = str(tmp_path / "config")
     Path(meetings_dir).mkdir()
     Path(config_dir).mkdir()
-    queued: list[str] = []
+    queued = _Queued()
 
-    async def hook(meeting_id: str) -> bool:
+    async def hook(meeting_id: str, force: bool = False) -> bool:
         queued.append(meeting_id)
+        queued.forced.append(force)
         return True
 
     insights_extract.set_enqueue_hook(hook)
@@ -259,10 +396,14 @@ async def test_backfill_skips_analyzed_unless_force(backfill_env: Any) -> None:
     assert res == {"queued": 1, "skipped": 1}
     assert queued == ["m-b"]
 
+    assert queued.forced == [False]
+
     queued.clear()
+    queued.forced.clear()
     res = await backfill(handle.engine, meetings_dir, config_dir, force=True)
     assert res == {"queued": 2, "skipped": 0}
     assert queued == ["m-a", "m-b"]
+    assert queued.forced == [True, True]
     handle.engine.dispose()
 
 
@@ -287,4 +428,26 @@ async def test_backfill_without_hook_queues_nothing(tmp_path: Path) -> None:
     _seed_transcribed(handle, str(tmp_path), "m-a", 1_000)
     insights_extract.set_enqueue_hook(None)
     assert await backfill(handle.engine, str(tmp_path), str(tmp_path)) == {"queued": 0, "skipped": 0}
+    handle.engine.dispose()
+
+
+async def test_forced_backfill_carries_force_and_reanalyzes(tmp_path: Path) -> None:
+    from test_insights_extract import _main_response, _make_service, _seed
+
+    handle, meetings_dir, config_dir, llm, service = _make_service(tmp_path, lambda n, o: _main_response())
+    meeting_id = _seed(handle.engine, meetings_dir)
+    await service.analyze_meeting(meeting_id)
+    assert len(llm.calls) == 1
+
+    async def hook(mid: str, force: bool = False) -> bool:
+        await service.analyze_meeting(mid, force=force)
+        return True
+
+    insights_extract.set_enqueue_hook(hook)
+    res = await backfill(handle.engine, meetings_dir, config_dir)
+    assert res == {"queued": 0, "skipped": 1} and len(llm.calls) == 1  # already analyzed
+
+    res = await backfill(handle.engine, meetings_dir, config_dir, force=True)
+    assert res == {"queued": 1, "skipped": 0}
+    assert len(llm.calls) == 2  # the forced job re-analyzed instead of skipping
     handle.engine.dispose()

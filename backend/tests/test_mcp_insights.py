@@ -261,7 +261,8 @@ def test_backfill_enqueues_when_not_dry_run(
     e.seed()
     enqueued: list[str] = []
 
-    def hook(meeting_id: str) -> bool:
+    def hook(meeting_id: str, force: bool = False) -> bool:
+        assert force is True
         enqueued.append(meeting_id)
         return True
 

@@ -505,3 +505,79 @@ def test_schema_literals_include_insights_values() -> None:
     assert "signals" in get_args(ArtifactKind)
     assert "import" in get_args(MeetingSource)
     assert json.dumps(get_args(MeetingSource))  # still plain string literals
+
+
+def test_split_route_enqueues_replacement_analysis_for_both_halves(tmp_path: Path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from olive.app import create_app
+    from olive.layout import meeting_paths
+
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    paths = meeting_paths(meetings_dir, NOW, "Split me", "m1")
+    audio = Path(paths.folder) / "audio" / "rec.wav"
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b"RIFFfakeaudio")
+    with handle.engine.begin() as conn:
+        _insert_meeting(conn, "m1", title="Split me")
+        _insert_meeting(conn, "never-analyzed", title="Plain")
+        _insert_speaker(conn, "sp1", "Alice")
+        for mid in ("m1", "never-analyzed"):
+            conn.execute(
+                text(
+                    "INSERT INTO recordings (id, meeting_id, path, mime, duration_ms, size_bytes, sha256, "
+                    "provider, created_at) VALUES (:r, :m, 'audio/rec.wav', 'audio/wav', 600000, 13, "
+                    ":sha, 'upload', :now)"
+                ),
+                {"r": f"r-{mid}", "m": mid, "sha": f"sha-{mid}", "now": NOW},
+            )
+        _insert_signal(conn, "sig1", "m1", "sp1")
+    (Path(meeting_paths(meetings_dir, NOW, "Plain", "never-analyzed").folder) / "audio").mkdir(
+        parents=True, exist_ok=True
+    )
+    (
+        Path(meeting_paths(meetings_dir, NOW, "Plain", "never-analyzed").folder) / "audio" / "rec.wav"
+    ).write_bytes(b"RIFFfakeaudio")
+
+    def fake_cut(src: Path, dst: Path, start_ms: int, end_ms: int | None) -> None:
+        dst.write_bytes(b"cut-" + str(dst).encode() + str(start_ms).encode())
+
+    monkeypatch.setattr(split_module, "_ffmpeg_cut", fake_cut)
+    monkeypatch.setattr(split_module, "_probe_duration_ms", lambda _p: 600_000)
+
+    class _Insights:
+        def __init__(self, enabled: bool) -> None:
+            self.enabled = enabled
+            self.queued: list[str] = []
+
+        def is_enabled(self) -> bool:
+            return self.enabled
+
+        async def enqueue_analyze(self, meeting_id: str, *, force: bool = False) -> bool:
+            self.queued.append(meeting_id)
+            return True
+
+    def client_for(svc: _Insights) -> TestClient:
+        return TestClient(
+            create_app(
+                {
+                    "db": handle.engine,
+                    "meetingsDir": meetings_dir,
+                    "configDir": str(tmp_path / "cfg"),
+                    "insightsService": svc,
+                }
+            )
+        )
+
+    off = _Insights(enabled=True)
+    res = client_for(off).post("/api/meetings/never-analyzed/split", json={"splitMs": 250_000})
+    assert res.status_code == 200
+    assert off.queued == []  # never analyzed: nothing to replace
+
+    on = _Insights(enabled=True)
+    res = client_for(on).post("/api/meetings/m1/split", json={"splitMs": 300_000})
+    assert res.status_code == 200, res.json()
+    assert on.queued == ["m1", res.json()["newMeeting"]["id"]]
+    with handle.engine.connect() as conn:
+        assert conn.execute(text("SELECT id FROM meeting_speaker_signals")).scalars().all() == []

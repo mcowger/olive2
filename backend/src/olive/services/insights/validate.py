@@ -130,6 +130,14 @@ def parse_llm_json(text: str) -> dict[str, Any]:
 def validate_chunk(text: str) -> ChunkExtraction:
     """Parse ``text`` and validate it against :class:`ChunkExtraction`."""
     data = parse_llm_json(text)
+    # Every field of ChunkExtraction has a default, so an object that is not an extraction at all
+    # (``{}``, ``{"error": ...}``) would validate as "nothing found". A genuinely empty result
+    # states it: ``{"speakers": [], "moments": []}``.
+    if "speakers" not in data and "moments" not in data:
+        raise InsightsValidationError(
+            "JSON object has neither a 'speakers' nor a 'moments' field; "
+            'reply with {"speakers": [...], "moments": [...]}'
+        )
     try:
         return ChunkExtraction.model_validate(data)
     except ValidationError as exc:

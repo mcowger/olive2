@@ -62,9 +62,17 @@ def resolve_labels(conn: Connection, meeting_id: str, labels: Iterable[str]) -> 
         .mappings()
         .all()
     )
+    # A name shared by two of this meeting's speakers is ambiguous: leave it unresolved rather
+    # than guess which person a label means.
     by_name: dict[str, dict] = {}
+    ambiguous_names: set[str] = set()
+    by_speaker: dict[str, dict] = {}
     for row in meeting_rows:
-        by_name.setdefault(normalize_alias(row["name"]), dict(row))
+        key = normalize_alias(row["name"])
+        by_speaker.setdefault(row["speaker_id"], dict(row))
+        if key in by_name and by_name[key]["speaker_id"] != row["speaker_id"]:
+            ambiguous_names.add(key)
+        by_name.setdefault(key, dict(row))
 
     alias_rows = (
         conn.execute(
@@ -80,9 +88,39 @@ def resolve_labels(conn: Connection, meeting_id: str, labels: Iterable[str]) -> 
         .mappings()
         .all()
     )
-    by_alias: dict[str, dict] = {}
+    alias_hits: dict[str, list[dict]] = {}
     for row in alias_rows:
-        by_alias.setdefault(row["alias_norm"], dict(row))
+        alias_hits.setdefault(row["alias_norm"], []).append(dict(row))
+    by_alias: dict[str, dict] = {}
+    for key, hits in alias_hits.items():
+        distinct = {h["speaker_id"] for h in hits}
+        if len(distinct) > 1:
+            # Several people carry this alias; only a single one of them present in this meeting
+            # disambiguates it.
+            in_meeting = [h for h in hits if h["speaker_id"] in by_speaker]
+            if len({h["speaker_id"] for h in in_meeting}) != 1:
+                continue
+            hits = in_meeting
+        by_alias[key] = hits[0]
+
+    def _from_alias_hit(label: str, hit: dict) -> ResolvedIdentity:
+        # A speaker already linked to this meeting keeps the provenance on that link (a voiceprint
+        # or manual match must not decay to a bare name match because the label hit an alias).
+        linked = by_speaker.get(hit["speaker_id"])
+        if linked is not None and linked["identity_source"] in IDENTITY_SOURCES:
+            return ResolvedIdentity(
+                label=label,
+                speaker_id=hit["speaker_id"],
+                identity_source=linked["identity_source"],
+                identity_confidence=linked["identity_confidence"],
+            )
+        confirmed = bool(hit["confirmed"])
+        return ResolvedIdentity(
+            label=label,
+            speaker_id=hit["speaker_id"],
+            identity_source="manual" if confirmed else "name",
+            identity_confidence=1.0 if confirmed else None,
+        )
 
     # Labels a human confirmed for this meeting (e.g. "Speaker 2" -> "Vineet") resolve through
     # the confirmed name, to the speaker already linked to the meeting under that name.
@@ -109,6 +147,8 @@ def resolve_labels(conn: Connection, meeting_id: str, labels: Iterable[str]) -> 
         name = confirmed_names.get(norm)
         if not name:
             return None
+        if name in ambiguous_names:
+            return None
         if name in by_name:
             hit = by_name[name]
             return ResolvedIdentity(
@@ -118,13 +158,7 @@ def resolve_labels(conn: Connection, meeting_id: str, labels: Iterable[str]) -> 
                 identity_confidence=hit["identity_confidence"],
             )
         if name in by_alias:
-            hit = by_alias[name]
-            return ResolvedIdentity(
-                label=label,
-                speaker_id=hit["speaker_id"],
-                identity_source="manual" if hit["confirmed"] else "name",
-                identity_confidence=1.0 if hit["confirmed"] else None,
-            )
+            return _from_alias_hit(label, by_alias[name])
         return None
 
     resolved: dict[str, ResolvedIdentity] = {}
@@ -134,6 +168,8 @@ def resolve_labels(conn: Connection, meeting_id: str, labels: Iterable[str]) -> 
         norm = normalize_alias(label)
         if is_generic_speaker_label(label):
             resolved[label] = _from_confirmed(label, norm) or ResolvedIdentity(label=label)
+        elif norm in ambiguous_names:
+            resolved[label] = ResolvedIdentity(label=label)
         elif norm in by_name:
             hit = by_name[norm]
             resolved[label] = ResolvedIdentity(
@@ -143,14 +179,7 @@ def resolve_labels(conn: Connection, meeting_id: str, labels: Iterable[str]) -> 
                 identity_confidence=hit["identity_confidence"],
             )
         elif norm in by_alias:
-            hit = by_alias[norm]
-            confirmed = bool(hit["confirmed"])
-            resolved[label] = ResolvedIdentity(
-                label=label,
-                speaker_id=hit["speaker_id"],
-                identity_source="manual" if confirmed else "name",
-                identity_confidence=1.0 if confirmed else None,
-            )
+            resolved[label] = _from_alias_hit(label, by_alias[norm])
         else:
             resolved[label] = _from_confirmed(label, norm) or ResolvedIdentity(label=label)
     return resolved

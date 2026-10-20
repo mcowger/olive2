@@ -122,7 +122,15 @@ async def test_dedupes_by_content_hash(env: Env) -> None:
         {"content": ("﻿" + ZOOM_VTT).replace("\n", "\r\n").encode("utf-8"), "filename": "other.vtt"}
     )
 
-    assert second == {"deduped": True, "meetingId": first["meetingId"]}
+    assert second["deduped"] is True and second["meetingId"] == first["meetingId"]
+    # Same keys as a fresh import so callers never have to special-case the dedup path.
+    assert set(second) == set(first)
+    assert second["warnings"] == [] and second["unmappedNames"] == []
+    assert second["format"] == first["format"] and second["subtype"] == first["subtype"]
+    assert second["segmentCount"] == first["segmentCount"] and second["startTime"] == first["startTime"]
+    assert {s["speakerId"] for s in second["speakers"]} == {
+        s["speakerId"] for s in first["speakers"] if s["speakerId"]
+    }
     assert len(env.rows("SELECT id FROM meetings")) == 1
     assert env.insights.calls == [first["meetingId"]]
 
@@ -220,6 +228,50 @@ async def test_ambiguous_name_is_reported_not_guessed(env: Env) -> None:
     alice = next(s for s in result["speakers"] if s["label"] == "Alice Smith")
     assert alice["speakerId"] is None
     assert len(env.rows("SELECT * FROM meeting_speakers")) == 1
+
+
+async def test_import_reuses_saved_alias_and_configured_me_speaker(env: Env, tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "insights"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({"meAliases": ["Phil"]}))
+    with env.db.engine.begin() as conn:
+        conn.execute(text("INSERT INTO speakers (id, name, created_at) VALUES ('sp-al','Alexandra Smith',1)"))
+        conn.execute(
+            text(
+                "INSERT INTO speakers (id, name, enrolled_at, created_at) VALUES ('sp-me','Philip McNeely',9,1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO speaker_aliases (id, alias_norm, speaker_id, kind, confirmed, created_at) "
+                "VALUES ('al1','ali','sp-al','nickname',1,1), ('al2','phil','sp-me','nickname',1,1)"
+            )
+        )
+    result = await env.service.import_transcript(
+        {"content": "Ali: Morning.\nPhil: Hi.\n", "filename": "2024-05-02.txt"}
+    )
+
+    by_label = {s["label"]: s["speakerId"] for s in result["speakers"]}
+    assert by_label == {"Ali": "sp-al", "Phil": "sp-me"}
+    assert {r["name"] for r in env.rows("SELECT name FROM speakers")} == {"Alexandra Smith", "Philip McNeely"}
+
+
+async def test_alias_shared_by_two_people_is_reported_not_guessed(env: Env) -> None:
+    with env.db.engine.begin() as conn:
+        conn.execute(text("INSERT INTO speakers (id, name, created_at) VALUES ('a1','Alice One',1)"))
+        conn.execute(text("INSERT INTO speakers (id, name, created_at) VALUES ('a2','Alice Two',2)"))
+        conn.execute(
+            text(
+                "INSERT INTO speaker_aliases (id, alias_norm, speaker_id, kind, confirmed, created_at) "
+                "VALUES ('x1','al','a1','nickname',1,1), ('x2','al','a2','nickname',1,2)"
+            )
+        )
+    result = await env.service.import_transcript(
+        {"content": "Al: Hi.\nBob Jones: Yo.\n", "filename": "2024-05-02.txt"}
+    )
+
+    assert result["unmappedNames"] == ["Al"]
+    assert next(s for s in result["speakers"] if s["label"] == "Al")["speakerId"] is None
 
 
 async def test_user_start_time_wins_over_filename(env: Env) -> None:

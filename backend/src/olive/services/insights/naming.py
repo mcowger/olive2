@@ -600,6 +600,8 @@ class SpeakerNamingService(InsightsService):
         created. The speaker is linked via ``meeting_speakers`` with ``identity_source='name'``
         (a stronger existing voiceprint or manual link is not downgraded), the name is recorded
         as a confirmed ``speaker_aliases`` row, and the proposal row becomes ``confirmed``.
+        A name that matches more than one person is ambiguous: nothing is linked or recorded
+        and the label is reported with ``speakerId`` None and ``ambiguous`` True.
         """
         cleaned: dict[str, str] = {}
         for label, name in confirmations.items():
@@ -620,18 +622,21 @@ class SpeakerNamingService(InsightsService):
                     text("SELECT id, name, enrolled_at FROM speakers ORDER BY created_at, id")
                 ).mappings()
             ]
-            aliases = {
-                r["alias_norm"]: r["speaker_id"]
-                for r in conn.execute(
-                    text(
-                        "SELECT alias_norm, speaker_id FROM speaker_aliases "
-                        "WHERE speaker_id IS NOT NULL ORDER BY confirmed DESC, created_at, id"
-                    )
-                ).mappings()
-            }
-            by_name: dict[str, str] = {}
+            alias_ids: dict[str, set[str]] = {}
+            for r in conn.execute(
+                text(
+                    "SELECT alias_norm, speaker_id FROM speaker_aliases "
+                    "WHERE speaker_id IS NOT NULL ORDER BY confirmed DESC, created_at, id"
+                )
+            ).mappings():
+                alias_ids.setdefault(r["alias_norm"], set()).add(r["speaker_id"])
+            # An alias shared by several people names no one in particular; only unambiguous
+            # aliases take part in resolution (and in finding "me").
+            aliases = {a: next(iter(ids)) for a, ids in alias_ids.items() if len(ids) == 1}
+            name_ids: dict[str, set[str]] = {}
             for sp in speakers:
-                by_name.setdefault(normalize_alias(sp["name"]), sp["id"])
+                name_ids.setdefault(normalize_alias(sp["name"]), set()).add(sp["id"])
+            by_name: dict[str, str] = {n: next(iter(ids)) for n, ids in name_ids.items() if len(ids) == 1}
             me_id = self._find_me(speakers, aliases, me_aliases)
 
             for label, display in cleaned.items():
@@ -639,6 +644,10 @@ class SpeakerNamingService(InsightsService):
                 created = False
                 if norm in me_aliases and me_id is not None:
                     speaker_id = me_id
+                elif len(name_ids.get(norm, set()) | alias_ids.get(norm, set())) > 1:
+                    # Several people answer to this name: leave the label unattributed.
+                    applied[label] = {"speakerId": None, "name": display, "created": False, "ambiguous": True}
+                    continue
                 elif norm in by_name:
                     speaker_id = by_name[norm]
                 elif norm in aliases:
@@ -651,6 +660,7 @@ class SpeakerNamingService(InsightsService):
                         {"id": speaker_id, "name": display, "now": now},
                     )
                     by_name[norm] = speaker_id
+                    name_ids[norm] = {speaker_id}
                     if norm in me_aliases:
                         me_id = speaker_id
 

@@ -256,6 +256,10 @@ def test_transcript_shape_matches_schema() -> None:
         "A" + " " * 60_000 + "no colon",
         "<" * 60_000,
         "<v " * 20_000,
+        "<v" + " " * 60_000,
+        "<v" + " " * 60_000 + "x",
+        "<v\t" * 20_000,
+        "<v Alice " + "a" * 60_000,
     ],
 )
 @pytest.mark.parametrize("fmt", ["text", "vtt", "srt"])

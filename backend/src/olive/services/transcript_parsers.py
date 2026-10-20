@@ -39,8 +39,10 @@ _CUE_RE = re.compile(rf"(?P<start>{_TS})\s*-->\s*(?P<end>{_TS})")
 _SRT_TIMING_RE = re.compile(r"\d{1,2}:\d{2}:\d{2},\d{1,3}\s*-->")
 _VTT_TIMING_RE = re.compile(r"(?:\d{1,2}:)?\d{1,2}:\d{2}\.\d{1,3}\s*-->")
 # Class members exclude "<" (and "." inside the class chain) so neither pattern can rescan a long
-# run of the same character from every start position.
-_VOICE_RE = re.compile(r"<v(?:\.[^\s>.<]*)*\s+([^<>]+)>", re.IGNORECASE)
+# run of the same character from every start position. The voice name must open with a non-space
+# character: otherwise ``\s+`` and the name class overlap on whitespace and an unterminated
+# ``<v`` followed by a long run of spaces backtracks quadratically.
+_VOICE_RE = re.compile(r"<v(?:\.[^\s>.<]*)*\s+([^<>\s][^<>]*)>", re.IGNORECASE)
 _TAG_RE = re.compile(r"</?[^<>\n]+>")
 _SPEAKER_PREFIX_RE = re.compile(rf"^(?P<name>[^\W\d_][^:\n]{{0,{_NAME_SPAN}}}):\s+(?P<text>\S.*)$")
 

@@ -504,6 +504,37 @@ async def test_apply_dedupes_case_insensitively_against_speakers_and_aliases(tmp
     assert linked == {"spk-vineet", "spk-dana"}
 
 
+async def test_apply_leaves_an_ambiguous_name_unattributed(tmp_path: Path) -> None:
+    handle, meetings_dir, _llm, service = _make_service(tmp_path)
+    mid = _seed(handle.engine, meetings_dir)
+    await service.propose_names(mid)
+    _add_speaker(handle.engine, "spk-sam1", "Sam Lee", created=1)
+    _add_speaker(handle.engine, "spk-sam2", "Sam Ray", created=2)
+    _add_speaker(handle.engine, "spk-twin-a", "Pat", created=3)
+    _add_speaker(handle.engine, "spk-twin-b", "pat", created=4)
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO speaker_aliases (id, alias_norm, speaker_id, kind, confirmed, created_at) "
+                "VALUES ('s1', 'sam', 'spk-sam1', 'nickname', 1, 1), ('s2', 'sam', 'spk-sam2', 'nickname', 1, 2)"
+            )
+        )
+
+    applied = service.apply_confirmations(
+        mid, {"Speaker 1": "Sam", "Speaker 2": "Pat", "Speaker 3": "Vineet"}
+    )
+
+    assert applied["Speaker 1"] == {"speakerId": None, "name": "Sam", "created": False, "ambiguous": True}
+    assert applied["Speaker 2"]["speakerId"] is None and applied["Speaker 2"]["ambiguous"] is True
+    assert applied["Speaker 3"]["created"] is True  # unambiguous names still apply
+    linked = {r["speaker_id"] for r in _rows(handle.engine, "SELECT speaker_id FROM meeting_speakers")}
+    assert linked == {applied["Speaker 3"]["speakerId"]}
+    assert _rows(handle.engine, "SELECT COUNT(*) AS n FROM speakers") == [{"n": 5}]  # nothing duplicated
+    props = _proposals(handle.engine)
+    assert props["Speaker 1"]["status"] != "confirmed" and props["Speaker 2"]["status"] != "confirmed"
+    handle.engine.dispose()
+
+
 async def test_apply_maps_the_users_aliases_to_the_single_me_speaker(tmp_path: Path) -> None:
     handle, meetings_dir, _llm, service = _make_service(tmp_path, me_aliases=["pmcneely", "Phil"])
     mid = _seed(handle.engine, meetings_dir)

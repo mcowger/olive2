@@ -261,7 +261,8 @@ def ground_moment(moment: ExtractedMoment, segments: Sequence[TranscriptSegment]
 # P1b queue seam
 # ---------------------------------------------------------------------------
 
-EnqueueHook = Callable[[str], Awaitable[bool] | bool]
+# ``hook(meeting_id)`` or, for a forced re-analysis, ``hook(meeting_id, force=True)``.
+EnqueueHook = Callable[..., Awaitable[bool] | bool]
 _enqueue_hook: EnqueueHook | None = None
 
 
@@ -455,8 +456,10 @@ class InsightsService:
 
     # -- public API --------------------------------------------------------
 
-    async def enqueue_analyze(self, meeting_id: str) -> bool:
+    async def enqueue_analyze(self, meeting_id: str, *, force: bool = False) -> bool:
         """Request a durable analysis job for ``meeting_id``; True if one was queued.
+
+        ``force`` is carried to the queued job so it re-analyzes an already-analyzed meeting.
 
         Returns False when insights is disabled or no queue hook is registered yet.
         The hook is the DBOS ``insights`` queue wiring registered via :func:`set_enqueue_hook`.
@@ -467,7 +470,7 @@ class InsightsService:
         if hook is None:
             logger.info("Insights enqueue skipped: no queue hook registered", {"meetingId": meeting_id})
             return False
-        res = hook(meeting_id)
+        res = hook(meeting_id, force=True) if force else hook(meeting_id)
         if inspect.isawaitable(res):
             res = await res
         return bool(res)

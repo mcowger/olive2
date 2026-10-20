@@ -159,7 +159,7 @@ class TranscriptImportService:
                 "Transcript import deduplicated via content hash",
                 {"category": "import", "sha256": content_sha, "meetingId": existing},
             )
-            return {"deduped": True, "meetingId": existing}
+            return self._deduped_result(existing)
 
         fmt: ImportFormat | None = opts.get("format")
         if fmt is not None and fmt not in ("vtt", "srt", "text"):
@@ -258,7 +258,7 @@ class TranscriptImportService:
             raced = self._find_import(content_sha)
             if raced is None:
                 raise
-            return {"deduped": True, "meetingId": raced}
+            return self._deduped_result(raced)
         except BaseException:
             shutil.rmtree(folder, ignore_errors=True)
             raise
@@ -306,6 +306,74 @@ class TranscriptImportService:
                 {"h": content_sha},
             ).first()
         return str(row[0]) if row else None
+
+    def _deduped_result(self, meeting_id: str) -> dict[str, Any]:
+        """The result for content already imported, in the same shape as a fresh import.
+
+        Callers (the route, the UI) read ``warnings``/``speakers``/``unmappedNames`` without
+        checking ``deduped`` first, so none of those keys may be missing. Values come from the
+        existing meeting; what was not persisted (``timingSynthetic``) is ``None``.
+        """
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(
+                    text("SELECT start_time, title FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            imp = (
+                conn.execute(
+                    text("SELECT source_format, subtype FROM transcript_imports WHERE meeting_id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            linked = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT s.name AS name, s.id AS speaker_id, ms.identity_source AS identity_source
+                        FROM meeting_speakers ms INNER JOIN speakers s ON s.id = ms.speaker_id
+                        WHERE ms.meeting_id = :id ORDER BY s.name, s.id
+                        """
+                    ),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
+        segment_count: int | None = None
+        if meeting is not None:
+            try:
+                folder = meeting_paths(
+                    self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting_id
+                ).folder
+                payload = json.loads((Path(folder) / TRANSCRIPT_JSON_REL).read_text(encoding="utf-8"))
+                segment_count = len(payload.get("segments") or [])
+            except (OSError, ValueError, AttributeError):
+                segment_count = None
+        return {
+            "meetingId": meeting_id,
+            "deduped": True,
+            "format": imp["source_format"] if imp else None,
+            "subtype": imp["subtype"] if imp else None,
+            "segmentCount": segment_count,
+            "startTime": int(meeting["start_time"]) if meeting else None,
+            "speakers": [
+                {
+                    "label": r["name"],
+                    "speakerId": r["speaker_id"],
+                    "identitySource": r["identity_source"] or "name",
+                }
+                for r in linked
+            ],
+            "unmappedNames": [],
+            "warnings": [],
+            "timingSynthetic": None,
+        }
 
     def _me_aliases(self, supplied: Sequence[str] | None) -> set[str]:
         configured = load_insights_config(self.config_dir).get("meAliases")

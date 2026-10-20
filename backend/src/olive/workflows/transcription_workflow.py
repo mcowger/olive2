@@ -1194,23 +1194,71 @@ async def enqueue_driver_job(
     return handle
 
 
+_INSIGHTS_SERVICE: Any = None
+_INSIGHTS_SERVICE_FACTORY: Callable[[], Any] | None = None
+
+
+def configure_insights_service_factory(factory: Callable[[], Any] | None) -> None:
+    """Let a recovered insights job build the service when no live caller registered one."""
+    global _INSIGHTS_SERVICE_FACTORY
+    _INSIGHTS_SERVICE_FACTORY = factory
+
+
+def _resolve_insights_service() -> Any:
+    if _INSIGHTS_SERVICE is not None:
+        return _INSIGHTS_SERVICE
+    if _INSIGHTS_SERVICE_FACTORY is not None:
+        return _INSIGHTS_SERVICE_FACTORY()
+    raise RuntimeError("Insights service is not configured; cannot run analysis")
+
+
+@DBOS.step()
+async def step_analyze_insights_meeting(meeting_id: str, force: bool = False) -> Any:
+    """Durable ``insights`` job: analyze one meeting.
+
+    A module-level registered function (not a closure) so DBOS can recover it after a restart; the
+    payload is only ``meeting_id`` + ``force`` and the service is rebuilt here.
+    """
+    return await _resolve_insights_service().analyze_meeting(meeting_id, force=force)
+
+
+async def enqueue_insights_job(meeting_id: str, force: bool = False) -> Any:
+    """Enqueue :func:`step_analyze_insights_meeting` on the ``insights`` queue, per-meeting deduplicated."""
+    with (
+        SetWorkflowID(f"insights:{meeting_id}:{uuid.uuid4().hex[:8]}"),
+        SetEnqueueOptions(deduplication_id=f"insights:{meeting_id}"),
+    ):
+        return await DBOS.enqueue_workflow_async(
+            QUEUE_INSIGHTS, step_analyze_insights_meeting, meeting_id, force
+        )
+
+
 def configure_insights_queue(insights_service: Any) -> None:
     """Register the durable ``insights`` queue hook for ``insights_service``.
 
-    ``InsightsService.enqueue_analyze`` calls the hook; the hook enqueues
-    ``analyze_meeting`` as a DBOS stage job, deduplicated per meeting.
+    ``InsightsService.enqueue_analyze`` calls the hook; the hook enqueues the registered
+    :func:`step_analyze_insights_meeting` (``meeting_id`` + ``force``) deduplicated per meeting.
+    The DBOS runtime is launched first when needed, and an enqueue failure is logged and reported
+    as ``False`` so callers (finalize, import, backfill, routes) never crash on it.
     """
     from ..services.insights import extract as insights_extract
 
-    async def _hook(meeting_id: str) -> bool:
-        await enqueue_stage_job(
-            QUEUE_INSIGHTS,
-            lambda: insights_service.analyze_meeting(meeting_id),
-            deduplication_id=f"insights:{meeting_id}",
-            workflow_id=f"insights:{meeting_id}:{uuid.uuid4().hex[:8]}",
-            label="insights:analyze",
-            meeting_id=meeting_id,
-        )
+    global _INSIGHTS_SERVICE
+    _INSIGHTS_SERVICE = insights_service
+
+    async def _hook(meeting_id: str, force: bool = False) -> bool:
+        try:
+            await ensure_dbos_launched_async(
+                config_dir=_RECOVERY_CONFIG_DIR or getattr(insights_service, "config_dir", None),
+                meetings_dir=_RECOVERY_MEETINGS_DIR or getattr(insights_service, "meetings_dir", None),
+            )
+            await enqueue_insights_job(meeting_id, force)
+        except Exception as exc:
+            logger.warn(
+                "Insights enqueue failed",
+                {"category": "insights", "meetingId": meeting_id, "error": str(exc)},
+            )
+            return False
         return True
 
     insights_extract.set_enqueue_hook(_hook)
@@ -1920,7 +1968,9 @@ async def cancel_dbos_workflows_for_meeting(
 
 __all__ = [
     "configure_insights_queue",
-    "configure_insights_queue",
+    "configure_insights_service_factory",
+    "enqueue_insights_job",
+    "step_analyze_insights_meeting",
     "QUEUE_ALIGN",
     "QUEUE_ASSEMBLYAI",
     "QUEUE_ASR",

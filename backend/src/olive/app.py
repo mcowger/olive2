@@ -629,8 +629,13 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     pass
             await asyncio.to_thread(shutdown_dbos)
 
-    from .workflows.transcription_workflow import configure_recovery_runtime
+    from .workflows.transcription_workflow import (
+        configure_insights_service_factory,
+        configure_recovery_runtime,
+    )
 
+    # Insights jobs DBOS resumes after a restart rebuild their service through this factory.
+    configure_insights_service_factory(get_insights_service)
     configure_recovery_runtime(
         db=db,
         progress_sink=lambda meeting_id, update: get_transcription_service().emit_progress(
@@ -1246,6 +1251,32 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    def _has_insights_signals(meeting_id: str) -> bool:
+        with db.connect() as conn:
+            return (
+                conn.execute(
+                    text("SELECT 1 FROM meeting_speaker_signals WHERE meeting_id = :id LIMIT 1"),
+                    {"id": meeting_id},
+                ).first()
+                is not None
+            )
+
+    async def _enqueue_insights_after_split(meeting_ids: list[str]) -> None:
+        """Queue replacement analysis for split halves; never fails the split itself."""
+        try:
+            service = get_insights_service()
+            if not service.is_enabled():
+                return
+            for mid in meeting_ids:
+                await service.enqueue_analyze(mid)
+        except Exception as exc:
+            from .logging_db import logger as _split_logger
+
+            _split_logger.warn(
+                "Insights enqueue after meeting split failed",
+                {"category": "insights", "meetingIds": meeting_ids, "error": str(exc)},
+            )
+
     @app.post("/api/meetings/{meeting_id}/split")
     async def post_meeting_split_route(meeting_id: str, request: Request) -> JSONResponse:
         try:
@@ -1259,7 +1290,13 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         try:
             from .services.split import split_meeting
 
+            was_analyzed = await asyncio.to_thread(_has_insights_signals, meeting_id)
             result = await asyncio.to_thread(split_meeting, db, meetings_dir, meeting_id, int(raw))
+            if was_analyzed:
+                # split_meeting dropped the whole-meeting signals; analyze each half afresh.
+                await _enqueue_insights_after_split(
+                    [meeting_id, str(result["newMeeting"]["id"])]
+                )
             return JSONResponse(result)
         except ValueError as exc:
             msg = str(exc)
