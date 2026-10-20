@@ -75,6 +75,259 @@
         }
       }
     },
+    "/api/insights/overview": {
+      "get": {
+        "summary": "Get Insights Overview Route",
+        "operationId": "get_insights_overview_route_api_insights_overview_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/person/{speaker_id}": {
+      "get": {
+        "summary": "Get Insights Person Route",
+        "operationId": "get_insights_person_route_api_insights_person__speaker_id__get",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/meeting/{meeting_id}": {
+      "get": {
+        "summary": "Get Insights Meeting Route",
+        "operationId": "get_insights_meeting_route_api_insights_meeting__meeting_id__get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/dyads": {
+      "get": {
+        "summary": "Get Insights Dyads Route",
+        "operationId": "get_insights_dyads_route_api_insights_dyads_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/find": {
+      "get": {
+        "summary": "Get Insights Find Route",
+        "operationId": "get_insights_find_route_api_insights_find_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/playbook/{speaker_id}": {
+      "get": {
+        "summary": "Get Insights Playbook Route",
+        "operationId": "get_insights_playbook_route_api_insights_playbook__speaker_id__get",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/coaching": {
+      "get": {
+        "summary": "Get Insights Coaching Route",
+        "operationId": "get_insights_coaching_route_api_insights_coaching_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/me": {
+      "get": {
+        "summary": "Get Insights Me Route",
+        "operationId": "get_insights_me_route_api_insights_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Insights Me Route",
+        "operationId": "put_insights_me_route_api_insights_me_put",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/backfill": {
+      "post": {
+        "summary": "Post Insights Backfill Route",
+        "operationId": "post_insights_backfill_route_api_insights_backfill_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/status": {
+      "get": {
+        "summary": "Get Insights Status Route",
+        "operationId": "get_insights_status_route_api_insights_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/transcripts/import": {
+      "post": {
+        "summary": "Post Transcript Import Route",
+        "operationId": "post_transcript_import_route_api_transcripts_import_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}": {
       "get": {
         "summary": "Get Meeting Detail Route",
@@ -2293,7 +2546,8 @@
             "enum": [
               "plaud",
               "upload",
-              "ios-shortcut"
+              "ios-shortcut",
+              "import"
             ],
             "title": "Source",
             "type": "string"
@@ -2437,7 +2691,8 @@
             "enum": [
               "plaud",
               "upload",
-              "ios-shortcut"
+              "ios-shortcut",
+              "import"
             ],
             "title": "Provider",
             "type": "string"
@@ -2497,7 +2752,8 @@
           "kind": {
             "enum": [
               "transcript",
-              "summary"
+              "summary",
+              "signals"
             ],
             "title": "Kind",
             "type": "string"
@@ -5089,6 +5345,1628 @@
           "updatedSegmentsCount"
         ],
         "title": "RapidEnrollAssignResponse",
+        "type": "object"
+      },
+      "InsightsSeriesPoint": {
+        "properties": {
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "meetingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Meetingids",
+            "type": "array"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bucket",
+          "meetingIds",
+          "n",
+          "startMs",
+          "value"
+        ],
+        "title": "InsightsSeriesPoint",
+        "type": "object"
+      },
+      "InsightsMomentCounts": {
+        "properties": {
+          "good": {
+            "default": 0,
+            "title": "Good",
+            "type": "integer"
+          },
+          "bad": {
+            "default": 0,
+            "title": "Bad",
+            "type": "integer"
+          }
+        },
+        "title": "InsightsMomentCounts",
+        "type": "object"
+      },
+      "InsightsDyadPoint": {
+        "properties": {
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "meetingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Meetingids",
+            "type": "array"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "tone": {
+            "title": "Tone",
+            "type": "number"
+          },
+          "warmth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Warmth"
+          },
+          "hostility": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hostility"
+          },
+          "moments": {
+            "$ref": "#/components/schemas/InsightsMomentCounts"
+          }
+        },
+        "required": [
+          "bucket",
+          "meetingIds",
+          "moments",
+          "n",
+          "startMs",
+          "tone",
+          "value"
+        ],
+        "title": "InsightsDyadPoint",
+        "type": "object"
+      },
+      "InsightsCoverage": {
+        "properties": {
+          "analyzedMeetings": {
+            "title": "Analyzedmeetings",
+            "type": "integer"
+          },
+          "totalMeetings": {
+            "title": "Totalmeetings",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "analyzedMeetings",
+          "totalMeetings"
+        ],
+        "title": "InsightsCoverage",
+        "type": "object"
+      },
+      "InsightsOutlier": {
+        "properties": {
+          "speakerId": {
+            "title": "Speakerid",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          },
+          "z": {
+            "title": "Z",
+            "type": "number"
+          },
+          "direction": {
+            "enum": [
+              "above",
+              "below"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "baselineMean": {
+            "title": "Baselinemean",
+            "type": "number"
+          },
+          "baselineStd": {
+            "title": "Baselinestd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "speakerId",
+          "meetingId",
+          "startMs",
+          "dimension",
+          "value",
+          "z",
+          "direction",
+          "baselineMean",
+          "baselineStd"
+        ],
+        "title": "InsightsOutlier",
+        "type": "object"
+      },
+      "InsightsUnattributed": {
+        "properties": {
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "meetingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Meetingids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "InsightsUnattributed",
+        "type": "object"
+      },
+      "InsightsOverview": {
+        "properties": {
+          "from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tag"
+          },
+          "bucket": {
+            "enum": [
+              "week",
+              "month"
+            ],
+            "title": "Bucket",
+            "type": "string"
+          },
+          "series": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/InsightsSeriesPoint"
+              },
+              "type": "array"
+            },
+            "title": "Series",
+            "type": "object"
+          },
+          "outliers": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsOutlier"
+            },
+            "title": "Outliers",
+            "type": "array"
+          },
+          "moments": {
+            "$ref": "#/components/schemas/InsightsMomentCounts"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/InsightsCoverage"
+          },
+          "unattributed": {
+            "$ref": "#/components/schemas/InsightsUnattributed"
+          }
+        },
+        "required": [
+          "bucket",
+          "coverage",
+          "moments",
+          "outliers",
+          "series",
+          "unattributed"
+        ],
+        "title": "InsightsOverview",
+        "type": "object"
+      },
+      "InsightsBaseline": {
+        "properties": {
+          "mean": {
+            "title": "Mean",
+            "type": "number"
+          },
+          "std": {
+            "title": "Std",
+            "type": "number"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mean",
+          "std",
+          "n"
+        ],
+        "title": "InsightsBaseline",
+        "type": "object"
+      },
+      "InsightsIdentityConfidence": {
+        "properties": {
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "nameShare": {
+            "title": "Nameshare",
+            "type": "number"
+          },
+          "voiceprintShare": {
+            "title": "Voiceprintshare",
+            "type": "number"
+          },
+          "otherShare": {
+            "title": "Othershare",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rows",
+          "nameShare",
+          "voiceprintShare",
+          "otherShare"
+        ],
+        "title": "InsightsIdentityConfidence",
+        "type": "object"
+      },
+      "InsightsPersonMeeting": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          }
+        },
+        "required": [
+          "meetingId",
+          "startMs"
+        ],
+        "title": "InsightsPersonMeeting",
+        "type": "object"
+      },
+      "InsightsWeekOutlier": {
+        "properties": {
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          },
+          "z": {
+            "title": "Z",
+            "type": "number"
+          },
+          "direction": {
+            "enum": [
+              "above",
+              "below"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "meetingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Meetingids",
+            "type": "array"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dimension",
+          "bucket",
+          "value",
+          "z",
+          "direction",
+          "n",
+          "meetingIds",
+          "startMs"
+        ],
+        "title": "InsightsWeekOutlier",
+        "type": "object"
+      },
+      "InsightsPerson": {
+        "properties": {
+          "speakerId": {
+            "title": "Speakerid",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          },
+          "bucket": {
+            "enum": [
+              "week",
+              "month"
+            ],
+            "title": "Bucket",
+            "type": "string"
+          },
+          "series": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/InsightsSeriesPoint"
+              },
+              "type": "array"
+            },
+            "title": "Series",
+            "type": "object"
+          },
+          "baseline": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/InsightsBaseline"
+            },
+            "title": "Baseline",
+            "type": "object"
+          },
+          "outlierMeetings": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsOutlier"
+            },
+            "title": "Outliermeetings",
+            "type": "array"
+          },
+          "outlierWeeks": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsWeekOutlier"
+            },
+            "title": "Outlierweeks",
+            "type": "array"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsPersonMeeting"
+            },
+            "title": "Meetings",
+            "type": "array"
+          },
+          "moments": {
+            "$ref": "#/components/schemas/InsightsMomentCounts"
+          },
+          "identityConfidence": {
+            "$ref": "#/components/schemas/InsightsIdentityConfidence"
+          },
+          "unattributed": {
+            "$ref": "#/components/schemas/InsightsUnattributed"
+          }
+        },
+        "required": [
+          "baseline",
+          "bucket",
+          "identityConfidence",
+          "meetings",
+          "moments",
+          "outlierMeetings",
+          "outlierWeeks",
+          "series",
+          "speakerId",
+          "unattributed"
+        ],
+        "title": "InsightsPerson",
+        "type": "object"
+      },
+      "InsightsMeetingSpeaker": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "speakerLabel": {
+            "title": "Speakerlabel",
+            "type": "string"
+          },
+          "identitySource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Identitysource"
+          },
+          "identityConfidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Identityconfidence"
+          },
+          "attributed": {
+            "title": "Attributed",
+            "type": "boolean"
+          },
+          "dimensions": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "talkMs": {
+            "title": "Talkms",
+            "type": "integer"
+          },
+          "turnCount": {
+            "title": "Turncount",
+            "type": "integer"
+          },
+          "interruptCount": {
+            "title": "Interruptcount",
+            "type": "integer"
+          },
+          "stance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stance"
+          }
+        },
+        "required": [
+          "meetingId",
+          "startMs",
+          "speakerLabel",
+          "attributed",
+          "dimensions",
+          "talkMs",
+          "turnCount",
+          "interruptCount"
+        ],
+        "title": "InsightsMeetingSpeaker",
+        "type": "object"
+      },
+      "InsightsMoment": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "endMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endms"
+          },
+          "meetingStartMs": {
+            "title": "Meetingstartms",
+            "type": "integer"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "speakerLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerlabel"
+          },
+          "towardSpeakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Towardspeakerid"
+          },
+          "towardLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Towardlabel"
+          },
+          "eventType": {
+            "title": "Eventtype",
+            "type": "string"
+          },
+          "valence": {
+            "title": "Valence",
+            "type": "string"
+          },
+          "framework": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Framework"
+          },
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dimension"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Severity"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rationale"
+          },
+          "guidance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Guidance"
+          },
+          "identitySource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Identitysource"
+          }
+        },
+        "required": [
+          "eventType",
+          "id",
+          "meetingId",
+          "meetingStartMs",
+          "quote",
+          "startMs",
+          "valence"
+        ],
+        "title": "InsightsMoment",
+        "type": "object"
+      },
+      "InsightsMeetingSignals": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "speakers": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsMeetingSpeaker"
+            },
+            "title": "Speakers",
+            "type": "array"
+          },
+          "moments": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsMoment"
+            },
+            "title": "Moments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "meetingId",
+          "moments",
+          "speakers",
+          "startMs"
+        ],
+        "title": "InsightsMeetingSignals",
+        "type": "object"
+      },
+      "InsightsDyad": {
+        "properties": {
+          "fromSpeakerId": {
+            "title": "Fromspeakerid",
+            "type": "string"
+          },
+          "toSpeakerId": {
+            "title": "Tospeakerid",
+            "type": "string"
+          },
+          "fromName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fromname"
+          },
+          "toName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Toname"
+          },
+          "otherSpeakerId": {
+            "title": "Otherspeakerid",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "meToThem",
+              "themToMe"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsDyadPoint"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "trend": {
+            "enum": [
+              "warming",
+              "cooling",
+              "stable",
+              "volatile",
+              "insufficient"
+            ],
+            "title": "Trend",
+            "type": "string"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "moments": {
+            "$ref": "#/components/schemas/InsightsMomentCounts"
+          },
+          "meetingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Meetingids",
+            "type": "array"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "direction",
+          "fromSpeakerId",
+          "meetingIds",
+          "moments",
+          "n",
+          "otherSpeakerId",
+          "series",
+          "startMs",
+          "toSpeakerId",
+          "trend"
+        ],
+        "title": "InsightsDyad",
+        "type": "object"
+      },
+      "InsightsDyads": {
+        "properties": {
+          "meId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meid"
+          },
+          "bucket": {
+            "enum": [
+              "week",
+              "month"
+            ],
+            "title": "Bucket",
+            "type": "string"
+          },
+          "dyads": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsDyad"
+            },
+            "title": "Dyads",
+            "type": "array"
+          },
+          "unattributed": {
+            "$ref": "#/components/schemas/InsightsUnattributed"
+          }
+        },
+        "required": [
+          "bucket",
+          "dyads",
+          "unattributed"
+        ],
+        "title": "InsightsDyads",
+        "type": "object"
+      },
+      "InsightsFindResult": {
+        "properties": {
+          "momentId": {
+            "title": "Momentid",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "meetingTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingtitle"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "endMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endms"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "eventType": {
+            "title": "Eventtype",
+            "type": "string"
+          },
+          "valence": {
+            "title": "Valence",
+            "type": "string"
+          },
+          "speaker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "toward": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Toward"
+          },
+          "towardSpeakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Towardspeakerid"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "enacted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enacted"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "eventType",
+          "meetingId",
+          "momentId",
+          "quote",
+          "score",
+          "startMs",
+          "valence"
+        ],
+        "title": "InsightsFindResult",
+        "type": "object"
+      },
+      "InsightsFindResponse": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsFindResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ],
+        "title": "InsightsFindResponse",
+        "type": "object"
+      },
+      "InsightsEvidence": {
+        "properties": {
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "startMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Startms"
+          }
+        },
+        "required": [
+          "quote",
+          "meetingId"
+        ],
+        "title": "InsightsEvidence",
+        "type": "object"
+      },
+      "InsightsGuidanceItem": {
+        "properties": {
+          "point": {
+            "title": "Point",
+            "type": "string"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Suggestion"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "counterExample": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InsightsEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "point",
+          "evidence"
+        ],
+        "title": "InsightsGuidanceItem",
+        "type": "object"
+      },
+      "InsightsPlaybook": {
+        "properties": {
+          "speakerId": {
+            "title": "Speakerid",
+            "type": "string"
+          },
+          "person": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Person"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          },
+          "doMore": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsGuidanceItem"
+            },
+            "title": "Domore",
+            "type": "array"
+          },
+          "easeOff": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsGuidanceItem"
+            },
+            "title": "Easeoff",
+            "type": "array"
+          },
+          "sampleSize": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Samplesize"
+          },
+          "generatedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Generatedat"
+          },
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "insufficientData": {
+            "default": false,
+            "title": "Insufficientdata",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "speakerId"
+        ],
+        "title": "InsightsPlaybook",
+        "type": "object"
+      },
+      "InsightsCoaching": {
+        "properties": {
+          "scope": {
+            "enum": [
+              "all",
+              "speaker"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          },
+          "strengths": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsGuidanceItem"
+            },
+            "title": "Strengths",
+            "type": "array"
+          },
+          "growthAreas": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsGuidanceItem"
+            },
+            "title": "Growthareas",
+            "type": "array"
+          },
+          "sampleSize": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Samplesize"
+          },
+          "generatedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Generatedat"
+          },
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "insufficientData": {
+            "default": false,
+            "title": "Insufficientdata",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "InsightsCoaching",
+        "type": "object"
+      },
+      "InsightsBackfillResult": {
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "skipped"
+        ],
+        "title": "InsightsBackfillResult",
+        "type": "object"
+      },
+      "InsightsStatus": {
+        "properties": {
+          "transcribedMeetings": {
+            "title": "Transcribedmeetings",
+            "type": "integer"
+          },
+          "analyzedMeetings": {
+            "title": "Analyzedmeetings",
+            "type": "integer"
+          },
+          "pendingMeetings": {
+            "title": "Pendingmeetings",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "analyzedMeetings",
+          "pendingMeetings",
+          "transcribedMeetings"
+        ],
+        "title": "InsightsStatus",
+        "type": "object"
+      },
+      "InsightsMe": {
+        "properties": {
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          }
+        },
+        "title": "InsightsMe",
+        "type": "object"
+      },
+      "TranscriptImportSpeaker": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "speakerId": {
+            "title": "Speakerid",
+            "type": "string"
+          },
+          "identitySource": {
+            "title": "Identitysource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "speakerId",
+          "identitySource"
+        ],
+        "title": "TranscriptImportSpeaker",
+        "type": "object"
+      },
+      "TranscriptImportResult": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "deduped": {
+            "title": "Deduped",
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Format"
+          },
+          "subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtype"
+          },
+          "segmentCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Segmentcount"
+          },
+          "startTime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Starttime"
+          },
+          "speakers": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptImportSpeaker"
+            },
+            "title": "Speakers",
+            "type": "array"
+          },
+          "unmappedNames": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unmappednames",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "timingSynthetic": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timingsynthetic"
+          }
+        },
+        "required": [
+          "deduped",
+          "meetingId"
+        ],
+        "title": "TranscriptImportResult",
         "type": "object"
       }
     }

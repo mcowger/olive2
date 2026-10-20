@@ -726,3 +726,272 @@ class MeetingUsageResponse(CamelModel):
     totalCostUsd: float = 0
     eventCount: int = 0
     events: list[UsageEvent] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Olive Insights (GET/PUT/POST /api/insights/*) and transcript import
+# ---------------------------------------------------------------------------
+
+InsightsBucket = Literal["week", "month"]
+
+
+class InsightsMomentCounts(CamelModel):
+    good: int = 0
+    bad: int = 0
+
+
+class InsightsCoverage(CamelModel):
+    analyzedMeetings: int
+    totalMeetings: int
+
+
+class InsightsUnattributed(CamelModel):
+    rows: int
+    meetingIds: list[str] = Field(default_factory=list)
+
+
+class InsightsSeriesPoint(CamelModel):
+    bucket: str
+    value: float
+    n: int
+    meetingIds: list[str]
+    startMs: int
+
+
+class InsightsDyadPoint(InsightsSeriesPoint):
+    tone: float
+    warmth: float | None = None
+    hostility: float | None = None
+    moments: InsightsMomentCounts
+
+
+class InsightsOutlier(CamelModel):
+    speakerId: str
+    meetingId: str
+    startMs: int
+    dimension: str
+    value: float
+    z: float
+    direction: Literal["above", "below"]
+    baselineMean: float
+    baselineStd: float
+
+
+class InsightsWeekOutlier(CamelModel):
+    dimension: str
+    bucket: str
+    value: float
+    z: float
+    direction: Literal["above", "below"]
+    n: int
+    meetingIds: list[str]
+    startMs: int
+
+
+class InsightsBaseline(CamelModel):
+    mean: float
+    std: float
+    n: int
+
+
+class InsightsPersonMeeting(CamelModel):
+    meetingId: str
+    startMs: int
+    title: str | None = None
+
+
+class InsightsIdentityConfidence(CamelModel):
+    rows: int
+    nameShare: float
+    voiceprintShare: float
+    otherShare: float
+
+
+class InsightsOverview(CamelModel):
+    from_: int | None = Field(default=None, alias="from")
+    to: int | None = None
+    speakerId: str | None = None
+    tag: str | None = None
+    bucket: InsightsBucket
+    series: dict[str, list[InsightsSeriesPoint]]
+    outliers: list[InsightsOutlier]
+    moments: InsightsMomentCounts
+    coverage: InsightsCoverage
+    unattributed: InsightsUnattributed
+
+
+class InsightsPerson(CamelModel):
+    speakerId: str
+    name: str | None = None
+    from_: int | None = Field(default=None, alias="from")
+    to: int | None = None
+    bucket: InsightsBucket
+    series: dict[str, list[InsightsSeriesPoint]]
+    baseline: dict[str, InsightsBaseline]
+    outlierMeetings: list[InsightsOutlier]
+    outlierWeeks: list[InsightsWeekOutlier]
+    meetings: list[InsightsPersonMeeting]
+    moments: InsightsMomentCounts
+    identityConfidence: InsightsIdentityConfidence
+    unattributed: InsightsUnattributed
+
+
+class InsightsMoment(CamelModel):
+    id: str
+    meetingId: str
+    startMs: int
+    endMs: int | None = None
+    meetingStartMs: int
+    speakerId: str | None = None
+    speakerLabel: str | None = None
+    towardSpeakerId: str | None = None
+    towardLabel: str | None = None
+    eventType: str
+    valence: str
+    framework: str | None = None
+    dimension: str | None = None
+    severity: float | None = None
+    quote: str
+    rationale: str | None = None
+    guidance: str | None = None
+    identitySource: str | None = None
+
+
+class InsightsMeetingSpeaker(CamelModel):
+    meetingId: str
+    startMs: int
+    speakerId: str | None = None
+    speakerLabel: str
+    identitySource: str | None = None
+    identityConfidence: float | None = None
+    attributed: bool
+    dimensions: dict[str, float]
+    talkMs: int
+    turnCount: int
+    interruptCount: int
+    stance: str | None = None
+
+
+class InsightsMeetingSignals(CamelModel):
+    meetingId: str
+    title: str | None = None
+    startMs: int
+    speakers: list[InsightsMeetingSpeaker]
+    moments: list[InsightsMoment]
+
+
+class InsightsDyad(CamelModel):
+    fromSpeakerId: str
+    toSpeakerId: str
+    fromName: str | None = None
+    toName: str | None = None
+    otherSpeakerId: str
+    direction: Literal["meToThem", "themToMe"]
+    series: list[InsightsDyadPoint]
+    trend: Literal["warming", "cooling", "stable", "volatile", "insufficient"]
+    n: int
+    moments: InsightsMomentCounts
+    meetingIds: list[str]
+    startMs: int
+
+
+class InsightsDyads(CamelModel):
+    meId: str | None = None
+    bucket: InsightsBucket
+    dyads: list[InsightsDyad]
+    unattributed: InsightsUnattributed
+
+
+class InsightsFindResult(CamelModel):
+    momentId: str
+    meetingId: str
+    meetingTitle: str | None = None
+    startMs: int
+    endMs: int | None = None
+    quote: str
+    eventType: str
+    valence: str
+    speaker: str | None = None
+    speakerId: str | None = None
+    toward: str | None = None
+    towardSpeakerId: str | None = None
+    score: float
+    enacted: bool | None = None
+    reason: str | None = None
+
+
+class InsightsFindResponse(CamelModel):
+    query: str
+    results: list[InsightsFindResult]
+
+
+class InsightsEvidence(CamelModel):
+    quote: str
+    meetingId: str
+    startMs: int | None = None
+
+
+class InsightsGuidanceItem(CamelModel):
+    point: str
+    suggestion: str | None = None
+    evidence: list[InsightsEvidence]
+    counterExample: InsightsEvidence | None = None
+
+
+class InsightsPlaybook(CamelModel):
+    speakerId: str
+    person: str | None = None
+    summary: str | None = None
+    doMore: list[InsightsGuidanceItem] = Field(default_factory=list)
+    easeOff: list[InsightsGuidanceItem] = Field(default_factory=list)
+    sampleSize: dict[str, int] | None = None
+    generatedAt: int | None = None
+    cached: bool = False
+    insufficientData: bool = False
+
+
+class InsightsCoaching(CamelModel):
+    scope: Literal["all", "speaker"]
+    speakerId: str | None = None
+    summary: str | None = None
+    strengths: list[InsightsGuidanceItem] = Field(default_factory=list)
+    growthAreas: list[InsightsGuidanceItem] = Field(default_factory=list)
+    sampleSize: dict[str, int] | None = None
+    generatedAt: int | None = None
+    cached: bool = False
+    insufficientData: bool = False
+
+
+class InsightsBackfillResult(CamelModel):
+    queued: int
+    skipped: int
+
+
+class InsightsStatus(CamelModel):
+    transcribedMeetings: int
+    analyzedMeetings: int
+    pendingMeetings: int
+
+
+class InsightsMe(CamelModel):
+    speakerId: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+
+class TranscriptImportSpeaker(CamelModel):
+    label: str
+    speakerId: str
+    identitySource: str
+
+
+class TranscriptImportResult(CamelModel):
+    meetingId: str
+    deduped: bool
+    format: str | None = None
+    subtype: str | None = None
+    segmentCount: int | None = None
+    startTime: int | None = None
+    speakers: list[TranscriptImportSpeaker] = Field(default_factory=list)
+    unmappedNames: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timingSynthetic: bool | None = None
