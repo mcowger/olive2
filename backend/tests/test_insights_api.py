@@ -599,3 +599,4 @@ def test_openapi_export_includes_insights_models() -> None:
     ):
         assert name in schemas, name
     assert "from" in schemas["InsightsOverview"]["properties"]
+    assert {"topGoodMoments", "topBadMoments"} <= set(schemas["InsightsOverview"]["properties"])

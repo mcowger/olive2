@@ -78,6 +78,9 @@ export interface InsightsOverview {
   series: Record<string, InsightsSeriesPoint[]>;
   outliers: InsightsOutlier[];
   moments: InsightsMomentCounts;
+  /** Strongest verified moments in scope, so the page can cite them without fetching each meeting. */
+  topGoodMoments: InsightsMoment[];
+  topBadMoments: InsightsMoment[];
   coverage: InsightsCoverage;
   unattributed: InsightsUnattributed;
 }

@@ -51,6 +51,8 @@ DEFAULTS: dict[str, Any] = {
     "minIdentityConfidence": 0.5,
     # Cap on the overview's outlier feed.
     "topOutliers": 10,
+    # Cap on each of the overview's top good / top bad moment feeds.
+    "topMoments": 5,
     # Severity assumed for a good/bad moment that carries none.
     "defaultMomentSeverity": 0.5,
     # Dimensions that make up a dyad's tone (warmth minus hostility).
@@ -473,9 +475,18 @@ class InsightsQueryService:
             "series": self._dimension_series(used, bucket),
             "outliers": outliers[: int(self.config["topOutliers"])],
             "moments": self._moment_counts(moments),
+            "topGoodMoments": self._top_moments(moments, "good"),
+            "topBadMoments": self._top_moments(moments, "bad"),
             "coverage": self._coverage(frm_ms, to_ms, tag),
             "unattributed": {"rows": len(unattributed), "meetingIds": sorted({s.meeting_id for s in unattributed})},
         }
+
+    def _top_moments(self, moments: Sequence[Mapping[str, Any]], valence: str) -> list[dict[str, Any]]:
+        """Strongest grounded moments of one valence, so the UI need not fetch each meeting to cite them."""
+        default = self.config["defaultMomentSeverity"]
+        rows = [m for m in moments if m["valence"] == valence and m["verified"]]
+        rows.sort(key=lambda m: (-(default if m["severity"] is None else m["severity"]), m["meeting_start"], m["start_ms"]))
+        return [self._moment_row(m) for m in rows[: int(self.config["topMoments"])]]
 
     # -- person -----------------------------------------------------------
 

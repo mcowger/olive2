@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { AlertTriangle, Quote, RefreshCw, Search, Sparkles } from "lucide-react";
 import { Badge, Button, Card, CardBody, Input, notify } from "./ui";
@@ -15,7 +15,6 @@ import {
   type InsightsFindResult,
   type InsightsGuidanceItem,
   type InsightsMe,
-  type InsightsMoment,
   type InsightsOutlier,
   type InsightsOverview,
   type InsightsPerson,
@@ -37,8 +36,6 @@ interface InsightsViewProps {
 }
 
 type Open = (meetingId: string, startMs?: number | null, quote?: string | null) => void;
-
-const WINS_FLAGS_MEETING_LIMIT = 12;
 
 function errorMessage(exc: unknown, fallback: string): string {
   return exc instanceof Error ? exc.message : fallback;
@@ -341,43 +338,8 @@ function OutlierList({ outliers, nameOf, onOpen }: { outliers: InsightsOutlier[]
 }
 
 function WinsAndFlags({ overview, onOpen }: { overview: InsightsOverview; onOpen: Open }): ReactElement {
-  const [moments, setMoments] = useState<InsightsMoment[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // The overview carries good/bad counts only; the citable moments live per meeting, so sample the most recent ones.
-  const recentIds = useMemo(() => {
-    const byId = new Map<string, number>();
-    for (const pts of Object.values(overview.series)) {
-      for (const p of pts) for (const id of p.meetingIds) byId.set(id, Math.max(byId.get(id) ?? 0, p.startMs));
-    }
-    return [...byId.entries()].sort((a, b) => b[1] - a[1]).slice(0, WINS_FLAGS_MEETING_LIMIT).map(([id]) => id);
-  }, [overview]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setMoments(null);
-    setError(null);
-    if (recentIds.length === 0) {
-      setMoments([]);
-      return;
-    }
-    void Promise.all(recentIds.map((id) => insightsApi.meeting(id)))
-      .then((all) => {
-        if (!cancelled) setMoments(all.flatMap((m) => m.moments));
-      })
-      .catch((exc) => {
-        if (!cancelled) setError(errorMessage(exc, "Failed to load moments"));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [recentIds]);
-
-  const pick = (valence: "good" | "bad") =>
-    (moments ?? [])
-      .filter((m) => m.valence === valence)
-      .sort((a, b) => (b.severity ?? 0) - (a.severity ?? 0))
-      .slice(0, 5);
+  // The overview carries the strongest moments already, so there is no per-meeting fetch.
+  const pick = (valence: "good" | "bad") => (valence === "good" ? overview.topGoodMoments : overview.topBadMoments);
 
   const column = (valence: "good" | "bad", title: string, total: number) => {
     const rows = pick(valence);
@@ -387,10 +349,8 @@ function WinsAndFlags({ overview, onOpen }: { overview: InsightsOverview; onOpen
           <h3 className="text-sm font-semibold text-base-content">{title}</h3>
           <Badge variant={valence === "good" ? "success" : "error"} soft>{total} total</Badge>
         </div>
-        {moments === null && !error ? (
-          <p className="text-sm text-base-content/70">Loading…</p>
-        ) : rows.length === 0 ? (
-          <p className="text-sm text-base-content/70">None in the {recentIds.length} most recent analyzed meetings.</p>
+        {rows.length === 0 ? (
+          <p className="text-sm text-base-content/70">None in this range.</p>
         ) : (
           rows.map((m) => (
             <QuoteButton
@@ -418,10 +378,9 @@ function WinsAndFlags({ overview, onOpen }: { overview: InsightsOverview; onOpen
       <CardBody className="space-y-3">
         <SectionHeader
           title="Wins & flags"
-          hint={`Strongest moments from the ${recentIds.length} most recent analyzed meetings. Counts cover the whole range.`}
+          hint="Strongest cited moments in this range. Counts cover every moment."
           right={<InferredBadge />}
         />
-        {error && <p className="text-sm text-error">{error}</p>}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {column("good", "Wins", overview.moments.good)}
           {column("bad", "Flags", overview.moments.bad)}

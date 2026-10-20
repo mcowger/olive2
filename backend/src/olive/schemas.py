@@ -807,35 +807,6 @@ class InsightsIdentityConfidence(CamelModel):
     otherShare: float
 
 
-class InsightsOverview(CamelModel):
-    from_: int | None = Field(default=None, alias="from")
-    to: int | None = None
-    speakerId: str | None = None
-    tag: str | None = None
-    bucket: InsightsBucket
-    series: dict[str, list[InsightsSeriesPoint]]
-    outliers: list[InsightsOutlier]
-    moments: InsightsMomentCounts
-    coverage: InsightsCoverage
-    unattributed: InsightsUnattributed
-
-
-class InsightsPerson(CamelModel):
-    speakerId: str
-    name: str | None = None
-    from_: int | None = Field(default=None, alias="from")
-    to: int | None = None
-    bucket: InsightsBucket
-    series: dict[str, list[InsightsSeriesPoint]]
-    baseline: dict[str, InsightsBaseline]
-    outlierMeetings: list[InsightsOutlier]
-    outlierWeeks: list[InsightsWeekOutlier]
-    meetings: list[InsightsPersonMeeting]
-    moments: InsightsMomentCounts
-    identityConfidence: InsightsIdentityConfidence
-    unattributed: InsightsUnattributed
-
-
 class InsightsMoment(CamelModel):
     id: str
     meetingId: str
@@ -857,6 +828,38 @@ class InsightsMoment(CamelModel):
     identitySource: str | None = None
     # False when the quote could not be found verbatim in the transcript (ungrounded).
     verified: bool = True
+
+
+class InsightsOverview(CamelModel):
+    from_: int | None = Field(default=None, alias="from")
+    to: int | None = None
+    speakerId: str | None = None
+    tag: str | None = None
+    bucket: InsightsBucket
+    series: dict[str, list[InsightsSeriesPoint]]
+    outliers: list[InsightsOutlier]
+    moments: InsightsMomentCounts
+    # Strongest verified moments in scope, so the page can cite them without a request per meeting.
+    topGoodMoments: list[InsightsMoment] = Field(default_factory=list)
+    topBadMoments: list[InsightsMoment] = Field(default_factory=list)
+    coverage: InsightsCoverage
+    unattributed: InsightsUnattributed
+
+
+class InsightsPerson(CamelModel):
+    speakerId: str
+    name: str | None = None
+    from_: int | None = Field(default=None, alias="from")
+    to: int | None = None
+    bucket: InsightsBucket
+    series: dict[str, list[InsightsSeriesPoint]]
+    baseline: dict[str, InsightsBaseline]
+    outlierMeetings: list[InsightsOutlier]
+    outlierWeeks: list[InsightsWeekOutlier]
+    meetings: list[InsightsPersonMeeting]
+    moments: InsightsMomentCounts
+    identityConfidence: InsightsIdentityConfidence
+    unattributed: InsightsUnattributed
 
 
 class InsightsMeetingSpeaker(CamelModel):

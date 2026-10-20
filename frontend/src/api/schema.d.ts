@@ -2734,6 +2734,83 @@ export interface components {
             /** Totalmeetings */
             totalMeetings: number;
         };
+        /** InsightsMoment */
+        InsightsMoment: {
+            /** Id */
+            id: string;
+            /** Meetingid */
+            meetingId: string;
+            /** Startms */
+            startMs: number;
+            /**
+             * Endms
+             * @default null
+             */
+            endMs: number | null;
+            /** Meetingstartms */
+            meetingStartMs: number;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Speakerlabel
+             * @default null
+             */
+            speakerLabel: string | null;
+            /**
+             * Towardspeakerid
+             * @default null
+             */
+            towardSpeakerId: string | null;
+            /**
+             * Towardlabel
+             * @default null
+             */
+            towardLabel: string | null;
+            /** Eventtype */
+            eventType: string;
+            /** Valence */
+            valence: string;
+            /**
+             * Framework
+             * @default null
+             */
+            framework: string | null;
+            /**
+             * Dimension
+             * @default null
+             */
+            dimension: string | null;
+            /**
+             * Severity
+             * @default null
+             */
+            severity: number | null;
+            /** Quote */
+            quote: string;
+            /**
+             * Rationale
+             * @default null
+             */
+            rationale: string | null;
+            /**
+             * Guidance
+             * @default null
+             */
+            guidance: string | null;
+            /**
+             * Identitysource
+             * @default null
+             */
+            identitySource: string | null;
+            /**
+             * Verified
+             * @default true
+             */
+            verified: boolean;
+        };
         /** InsightsOutlier */
         InsightsOutlier: {
             /** Speakerid */
@@ -2799,6 +2876,10 @@ export interface components {
             /** Outliers */
             outliers: components["schemas"]["InsightsOutlier"][];
             moments: components["schemas"]["InsightsMomentCounts"];
+            /** Topgoodmoments */
+            topGoodMoments?: components["schemas"]["InsightsMoment"][];
+            /** Topbadmoments */
+            topBadMoments?: components["schemas"]["InsightsMoment"][];
             coverage: components["schemas"]["InsightsCoverage"];
             unattributed: components["schemas"]["InsightsUnattributed"];
         };
@@ -2938,83 +3019,6 @@ export interface components {
              * @default null
              */
             stance: string | null;
-        };
-        /** InsightsMoment */
-        InsightsMoment: {
-            /** Id */
-            id: string;
-            /** Meetingid */
-            meetingId: string;
-            /** Startms */
-            startMs: number;
-            /**
-             * Endms
-             * @default null
-             */
-            endMs: number | null;
-            /** Meetingstartms */
-            meetingStartMs: number;
-            /**
-             * Speakerid
-             * @default null
-             */
-            speakerId: string | null;
-            /**
-             * Speakerlabel
-             * @default null
-             */
-            speakerLabel: string | null;
-            /**
-             * Towardspeakerid
-             * @default null
-             */
-            towardSpeakerId: string | null;
-            /**
-             * Towardlabel
-             * @default null
-             */
-            towardLabel: string | null;
-            /** Eventtype */
-            eventType: string;
-            /** Valence */
-            valence: string;
-            /**
-             * Framework
-             * @default null
-             */
-            framework: string | null;
-            /**
-             * Dimension
-             * @default null
-             */
-            dimension: string | null;
-            /**
-             * Severity
-             * @default null
-             */
-            severity: number | null;
-            /** Quote */
-            quote: string;
-            /**
-             * Rationale
-             * @default null
-             */
-            rationale: string | null;
-            /**
-             * Guidance
-             * @default null
-             */
-            guidance: string | null;
-            /**
-             * Identitysource
-             * @default null
-             */
-            identitySource: string | null;
-            /**
-             * Verified
-             * @default true
-             */
-            verified: boolean;
         };
         /** InsightsMeetingSignals */
         InsightsMeetingSignals: {

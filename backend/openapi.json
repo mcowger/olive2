@@ -5486,6 +5486,186 @@
         "title": "InsightsCoverage",
         "type": "object"
       },
+      "InsightsMoment": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "endMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endms"
+          },
+          "meetingStartMs": {
+            "title": "Meetingstartms",
+            "type": "integer"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "speakerLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerlabel"
+          },
+          "towardSpeakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Towardspeakerid"
+          },
+          "towardLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Towardlabel"
+          },
+          "eventType": {
+            "title": "Eventtype",
+            "type": "string"
+          },
+          "valence": {
+            "title": "Valence",
+            "type": "string"
+          },
+          "framework": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Framework"
+          },
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dimension"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Severity"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rationale"
+          },
+          "guidance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Guidance"
+          },
+          "identitySource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Identitysource"
+          },
+          "verified": {
+            "default": true,
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "eventType",
+          "id",
+          "meetingId",
+          "meetingStartMs",
+          "quote",
+          "startMs",
+          "valence"
+        ],
+        "title": "InsightsMoment",
+        "type": "object"
+      },
       "InsightsOutlier": {
         "properties": {
           "speakerId": {
@@ -5640,6 +5820,20 @@
           },
           "moments": {
             "$ref": "#/components/schemas/InsightsMomentCounts"
+          },
+          "topGoodMoments": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsMoment"
+            },
+            "title": "Topgoodmoments",
+            "type": "array"
+          },
+          "topBadMoments": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsMoment"
+            },
+            "title": "Topbadmoments",
+            "type": "array"
           },
           "coverage": {
             "$ref": "#/components/schemas/InsightsCoverage"
@@ -6005,186 +6199,6 @@
           "interruptCount"
         ],
         "title": "InsightsMeetingSpeaker",
-        "type": "object"
-      },
-      "InsightsMoment": {
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "meetingId": {
-            "title": "Meetingid",
-            "type": "string"
-          },
-          "startMs": {
-            "title": "Startms",
-            "type": "integer"
-          },
-          "endMs": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Endms"
-          },
-          "meetingStartMs": {
-            "title": "Meetingstartms",
-            "type": "integer"
-          },
-          "speakerId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Speakerid"
-          },
-          "speakerLabel": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Speakerlabel"
-          },
-          "towardSpeakerId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Towardspeakerid"
-          },
-          "towardLabel": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Towardlabel"
-          },
-          "eventType": {
-            "title": "Eventtype",
-            "type": "string"
-          },
-          "valence": {
-            "title": "Valence",
-            "type": "string"
-          },
-          "framework": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Framework"
-          },
-          "dimension": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Dimension"
-          },
-          "severity": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Severity"
-          },
-          "quote": {
-            "title": "Quote",
-            "type": "string"
-          },
-          "rationale": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Rationale"
-          },
-          "guidance": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Guidance"
-          },
-          "identitySource": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Identitysource"
-          },
-          "verified": {
-            "default": true,
-            "title": "Verified",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "eventType",
-          "id",
-          "meetingId",
-          "meetingStartMs",
-          "quote",
-          "startMs",
-          "valence"
-        ],
-        "title": "InsightsMoment",
         "type": "object"
       },
       "InsightsMeetingSignals": {
@@ -6977,3 +6991,4 @@
     }
   }
 }
+

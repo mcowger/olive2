@@ -209,6 +209,34 @@ def test_overview_coverage_and_moment_counts(env: Any) -> None:
     assert out["moments"] == {"good": 1, "bad": 2}
 
 
+def test_overview_top_moments_are_verified_ranked_capped_and_drillable(env: Any) -> None:
+    _, seed, svc = env
+    seed.meeting("a", _ms(2026, 1, 10))
+    for i in range(8):
+        seed.moment("a", 1000 + i, ME, ALICE, "good", severity=0.1 * (i + 1))
+    seed.moment("a", 9000, ME, ALICE, "good", severity=1.0, verified=0)
+    seed.moment("a", 2000, ALICE, ME, "bad", severity=0.4)
+    seed.moment("a", 3000, ALICE, ME, "bad", severity=0.9)
+    out = svc.overview()
+    good, bad = out["topGoodMoments"], out["topBadMoments"]
+    assert len(good) == 5
+    assert [m["startMs"] for m in good] == [1007, 1006, 1005, 1004, 1003]  # strongest first, unverified excluded
+    assert all(m["valence"] == "good" and m["verified"] for m in good)
+    assert [m["startMs"] for m in bad] == [3000, 2000]
+    assert all(m["meetingId"] == "a" and m["quote"] and m["eventType"] for m in good + bad)
+    assert out["moments"] == {"good": 8, "bad": 2}
+
+
+def test_overview_top_moments_respect_speaker_scope_and_unverified_flag(env: Any) -> None:
+    _, seed, svc = env
+    seed.meeting("a", _ms(2026, 1, 10))
+    seed.moment("a", 1000, ME, ALICE, "good")
+    seed.moment("a", 2000, ALICE, ME, "good")
+    assert [m["startMs"] for m in svc.overview(speaker_id=ALICE)["topGoodMoments"]] == [2000]
+    seed.moment("a", 3000, ME, ALICE, "bad", verified=0)
+    assert svc.overview(include_unverified=True)["topBadMoments"] == []  # top feed is verified-only
+
+
 def test_overview_top_outliers_reference_meetings(env: Any) -> None:
     _, seed, svc = env
     for i in range(1, 9):
