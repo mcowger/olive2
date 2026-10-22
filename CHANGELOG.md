@@ -19,6 +19,7 @@ every section newer than the previous tag into the GitHub release notes.
 
 ### Added
 
+- **Merge meetings back together** — the inverse of splitting: select two or more meetings in the meetings list (Select → tick the clips → Merge) and they are joined into the earliest one in chronological order via `POST /api/meetings/merge { meetingIds }`. Audio is concatenated with ffmpeg (mixed formats are re-encoded), transcripts are stitched with timestamp offsets so no re-transcription is needed, tags and speaker links are unioned, stale summaries are dropped, and the source meetings are permanently deleted (including Plaud tombstones, so the poller won't re-import them). Also available to agents as the opt-in MCP write tool `merge_meetings { meetingIds, dryRun? }` (`OLIVE_MCP_WRITE=1`).
 - **Split meeting in two** — over-long recordings (meeting + forgotten commute) can be cut at any point via `POST /api/meetings/{id}/split { splitMs }`. The audio is cut with ffmpeg, every JSON transcript is divided on the same boundary and re-anchored (no re-transcription), summaries are discarded on both halves as stale, and the second half becomes a new "(Part 2)" meeting. In the app, drag the split slider under the audio player (or "Use current position"), or hover between transcript turns and hit "✂ Split meeting here", then confirm — delete the half you don't want afterwards. Also available to agents as the opt-in MCP write tool `split_meeting { meetingId, splitMs, expectedTitle?, dryRun? }` (`OLIVE_MCP_WRITE=1`).
 
 ### Fixed

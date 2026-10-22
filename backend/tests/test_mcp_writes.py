@@ -450,6 +450,7 @@ def test_write_tools_list_includes_second_wave(tmp_path: Path) -> None:
         "reidentify_speakers",
         "delete_meeting",
         "split_meeting",
+        "merge_meetings",
         "update_meeting_start_time",
         "auto_title_meeting",
         "summarize_meeting",
@@ -626,6 +627,76 @@ def test_split_meeting_dry_run_and_guards(tmp_path: Path) -> None:
 
     err = _call_tool(client, "split_meeting", {"meetingId": "missing", "splitMs": 30_000})
     assert err.get("isError") is True
+    handle.engine.dispose()
+
+
+def test_merge_meetings_dry_run_and_apply(tmp_path: Path, monkeypatch) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    folder_a = _seed_meeting(handle.engine, meetings_dir, "m-merge-1", "Merge one", ["work"])
+    folder_b = _seed_meeting(handle.engine, meetings_dir, "m-merge-2", "Merge two", ["road"])
+    (folder_a / "audio").mkdir(parents=True, exist_ok=True)
+    (folder_b / "audio").mkdir(parents=True, exist_ok=True)
+    (folder_a / "audio/meeting.m4a").write_bytes(b"clip-a")
+    (folder_b / "audio/meeting.m4a").write_bytes(b"clip-b")
+    now = 1_700_000_000_000
+    with handle.engine.begin() as conn:
+        for mid in ("m-merge-1", "m-merge-2"):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO recordings (
+                      id, meeting_id, path, mime, duration_ms, size_bytes, sha256,
+                      provider, provider_recording_id, created_at
+                    ) VALUES (:rid, :mid, 'audio/meeting.m4a', 'audio/mp4', 60000, 1234,
+                              :sha, 'upload', NULL, :now)
+                    """
+                ),
+                {"rid": f"rec-{mid}", "mid": mid, "sha": f"sha-{mid}", "now": now},
+            )
+        conn.execute(
+            text("UPDATE meetings SET start_time = :start, end_time = :end WHERE id = 'm-merge-2'"),
+            {"start": now + 60_000, "end": now + 120_000},
+        )
+
+    from olive.services import merge as merge_module
+
+    def fake_concat(sources, dst, ext):  # type: ignore[no-untyped-def]
+        Path(dst).write_bytes(b"".join(Path(src).read_bytes() for src in sources))
+
+    monkeypatch.setattr(merge_module, "_concat_audio", fake_concat)
+    monkeypatch.setattr(merge_module, "_probe_duration_ms", lambda _path: None)
+
+    app = _write_app(tmp_path, handle.engine)
+    client = TestClient(app)
+
+    plan = _parse_text(
+        _call_tool(
+            client,
+            "merge_meetings",
+            {"meetingIds": ["m-merge-2", "m-merge-1"], "dryRun": True},
+        )
+    )
+    assert plan["dryRun"] is True
+    assert plan["wouldMerge"] is True
+    assert plan["mergedMeetingId"] == "m-merge-1"
+    assert plan["deletedMeetingIds"] == ["m-merge-2"]
+    assert [m["title"] for m in plan["meetings"]] == ["Merge one", "Merge two"]
+
+    err = _call_tool(client, "merge_meetings", {"meetingIds": ["m-merge-1"]})
+    assert err.get("isError") is True
+    err = _call_tool(client, "merge_meetings", {"meetingIds": ["m-merge-1", "missing"]})
+    assert err.get("isError") is True
+
+    merged = _parse_text(_call_tool(client, "merge_meetings", {"meetingIds": ["m-merge-2", "m-merge-1"]}))
+    assert merged["operation"] == "merge_meetings"
+    assert merged["meeting"]["id"] == "m-merge-1"
+    assert merged["deletedMeetingIds"] == ["m-merge-2"]
+    assert sorted(merged["meeting"]["tags"]) == ["road", "work"]
+    assert not folder_b.exists()
+    with handle.engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM meetings")).scalar_one() == 1
+        assert conn.execute(text("SELECT duration_ms FROM recordings")).scalar_one() == 120_000
     handle.engine.dispose()
 
 

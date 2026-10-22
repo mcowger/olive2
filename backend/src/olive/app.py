@@ -841,6 +841,35 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    @app.post("/api/meetings/merge")
+    async def post_meetings_merge_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+
+        raw_ids = body.get("meetingIds", body.get("meeting_ids")) if isinstance(body, dict) else None
+        if (
+            not isinstance(raw_ids, list)
+            or len(raw_ids) < 2
+            or not all(isinstance(mid, str) and mid.strip() for mid in raw_ids)
+        ):
+            return JSONResponse(
+                {"error": "meetingIds must be an array of at least two meeting ids"},
+                status_code=400,
+            )
+        try:
+            from .services.merge import merge_meetings
+
+            result = await asyncio.to_thread(merge_meetings, db, meetings_dir, [str(mid) for mid in raw_ids])
+            return JSONResponse(result)
+        except ValueError as exc:
+            msg = str(exc)
+            code = 404 if "not found" in msg.lower() else 400
+            return JSONResponse({"error": msg}, status_code=code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @app.put("/api/meetings/{meeting_id}/tags")
     async def put_meeting_tags_route(meeting_id: str, request: Request) -> JSONResponse:
         try:

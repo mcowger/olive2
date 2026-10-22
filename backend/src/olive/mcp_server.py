@@ -759,6 +759,31 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "merge_meetings",
+        "description": (
+            "Merge two or more meetings into the earliest one (inverse of split_meeting): audio is "
+            "concatenated with ffmpeg, transcripts are joined with timestamp offsets without "
+            "re-transcription, summaries are dropped as stale, tags/speakers are unioned, and the "
+            "source meetings are deleted. Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to preview."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingIds"],
+            "properties": {
+                "meetingIds": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Meeting IDs to merge (at least two; merged chronologically by start time)",
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the plan without mutating",
+                },
+            },
+        },
+    },
+    {
         "name": "update_meeting_start_time",
         "description": (
             "Shift a meeting's start time (duration preserved, on-disk folder moved when the date "
@@ -1346,6 +1371,54 @@ async def _handle_lifecycle_mcp_tools(
         except Exception as exc:
             return _error_result(str(exc))
         return _text_result({"operation": "split_meeting", **sp_res})
+
+    if tool_name == "merge_meetings":
+        mg_raw_ids = arguments.get("meetingIds")
+        mg_dry = bool(arguments.get("dryRun"))
+        if (
+            not isinstance(mg_raw_ids, list)
+            or len(mg_raw_ids) < 2
+            or not all(isinstance(mid, str) and mid.strip() for mid in mg_raw_ids)
+        ):
+            return _error_result("meetingIds must be an array of at least two meeting ids")
+        mg_ids = [str(mid) for mid in mg_raw_ids]
+        mg_plans: list[dict[str, Any]] = []
+        for mg_mid in mg_ids:
+            mg_detail = get_meeting(db, mg_mid, meetings_dir)
+            if not mg_detail:
+                return _error_result(f"Meeting not found: {mg_mid}")
+            mg_recs = mg_detail.recordings or []
+            mg_plans.append(
+                {
+                    "meetingId": mg_mid,
+                    "title": str(mg_detail.meeting.title or ""),
+                    "startTime": int(mg_detail.meeting.startTime),
+                    "durationMs": mg_recs[0].durationMs if mg_recs else None,
+                }
+            )
+        mg_plans.sort(key=lambda p: p["startTime"])
+        if mg_dry:
+            return _text_result(
+                {
+                    "dryRun": True,
+                    "operation": "merge_meetings",
+                    "mergedMeetingId": mg_plans[0]["meetingId"],
+                    "mergedTitle": mg_plans[0]["title"],
+                    "meetings": mg_plans,
+                    "deletedMeetingIds": [p["meetingId"] for p in mg_plans[1:]],
+                    "summariesDropped": True,
+                    "wouldMerge": True,
+                }
+            )
+        from .services.merge import merge_meetings as _merge_meetings
+
+        try:
+            mg_res = await asyncio.to_thread(_merge_meetings, db, meetings_dir, mg_ids)
+        except ValueError as exc:
+            return _error_result(str(exc))
+        except Exception as exc:
+            return _error_result(str(exc))
+        return _text_result({"operation": "merge_meetings", **mg_res})
 
     if tool_name == "delete_meeting":
         dm_mid = str(arguments.get("meetingId") or "").strip()

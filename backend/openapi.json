@@ -295,6 +295,22 @@
         }
       }
     },
+    "/api/meetings/merge": {
+      "post": {
+        "summary": "Post Meetings Merge Route",
+        "operationId": "post_meetings_merge_route_api_meetings_merge_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/tags": {
       "put": {
         "summary": "Put Meeting Tags Route",

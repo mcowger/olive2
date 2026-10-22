@@ -1046,6 +1046,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkModal, setShowBulkModal] = useState(false);
+  const [mergingMeetings, setMergingMeetings] = useState(false);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -1191,6 +1192,50 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
     setSelectedIds([]);
   };
 
+  const handleMergeSelected = async () => {
+    if (mergingMeetings) return;
+    const ordered = meetings
+      .filter((m) => selectedIds.includes(m.id))
+      .slice()
+      .sort((a, b) => a.startTime - b.startTime);
+    if (ordered.length < 2) return;
+    const target = ordered[0];
+    const titles = ordered.map((m) => `“${m.title}”`).join(", ");
+    const others = ordered.length - 1;
+    if (
+      !(await confirmAction({
+        title: `Merge ${ordered.length} meetings`,
+        message: `Merge ${titles} into “${target.title}” in chronological order? Audio and transcripts are joined without re-transcription, and the other ${others} meeting${others === 1 ? "" : "s"} will be permanently deleted. Summaries are dropped because they only describe the separate clips.`,
+        confirmLabel: "Merge & delete originals",
+        danger: true
+      }))
+    ) {
+      return;
+    }
+    setMergingMeetings(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/meetings/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingIds: ordered.map((m) => m.id) })
+      });
+      const data = (await res.json().catch(() => ({}))) as { meeting?: { id?: string }; error?: string };
+      if (!res.ok) throw new Error(data.error || `Failed to merge meetings (HTTP ${res.status})`);
+      const mergedId = data.meeting?.id;
+      setSelectedIds([]);
+      setSelectMode(false);
+      setMeetings((prev) => prev.filter((m) => m.id === mergedId || !ordered.some((o) => o.id === m.id)));
+      setTotal((t) => Math.max(0, t - others));
+      await fetchMeetings({ silent: true });
+      if (mergedId) onSelectMeeting(mergedId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to merge meetings");
+    } finally {
+      setMergingMeetings(false);
+    }
+  };
+
   const handleDeleteMeeting = async (id: string, title: string) => {
     if (!(await confirmAction({ title: "Delete meeting", message: `Are you sure you want to delete meeting "${title}"? This will permanently remove its recordings, transcripts, and summaries.`, confirmLabel: "Delete", danger: true }))) {
       return;
@@ -1333,6 +1378,18 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
           {selectedIds.length > 0 && (
             <button type="button" onClick={handleClearSelection} className="btn min-h-[36px] hover:border-error/60 hover:text-error">
               Clear
+            </button>
+          )}
+          {selectedIds.length >= 2 && (
+            <button
+              type="button"
+              onClick={() => void handleMergeSelected()}
+              disabled={mergingMeetings}
+              className="btn min-h-[36px] gap-1.5 border-primary/60 text-primary hover:bg-primary/10"
+              title="Join the selected meetings (chronological) into one and delete the rest"
+            >
+              <Link2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {mergingMeetings ? "Merging…" : `Merge ${selectedIds.length}`}
             </button>
           )}
         </div>
