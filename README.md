@@ -41,6 +41,12 @@ Ingests audio from Plaud hardware recorders, iOS Voice Memos, and browser upload
 
 ---
 
+## User guides
+
+- [Voiceprint matching: what it is and how to tune it](docs/VOICEPRINT_MATCHING.md) — how Olive learns voices, what the clustering and voiceprint-matching sliders do, and how to fix mislabeled speakers (including the "favorite speaker" effect).
+
+---
+
 ## Screenshots
 
 ### Meeting archive & detail view
