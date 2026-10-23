@@ -72,6 +72,14 @@ CREATE_TABLE_STATEMENTS: list[str] = [
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )""",
+    """CREATE TABLE IF NOT EXISTS stage_checkpoints (
+    meeting_id TEXT NOT NULL REFERENCES meetings(id),
+    stage TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    doc TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (meeting_id, stage)
+  )""",
     """CREATE TABLE IF NOT EXISTS plaud_ingest_state (
     meeting_id TEXT PRIMARY KEY REFERENCES meetings(id),
     plaud_file_id TEXT NOT NULL UNIQUE,

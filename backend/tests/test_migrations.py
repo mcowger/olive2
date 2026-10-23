@@ -167,6 +167,25 @@ def test_migrations_apply_idempotently_and_round_trip_every_table() -> None:
             },
         )
 
+        checkpoint_doc = json.dumps({"turns": [{"startMs": 0, "endMs": 1000}]})
+        conn.execute(
+            text(
+                """
+                INSERT INTO stage_checkpoints (meeting_id, stage, run_id, doc, updated_at)
+                VALUES ('meeting-1', 'diarize', 'run-1', :doc, :now)
+                """
+            ),
+            {"doc": checkpoint_doc, "now": now},
+        )
+        checkpoint = conn.execute(text("SELECT * FROM stage_checkpoints")).mappings().one()
+        assert dict(checkpoint) == {
+            "meeting_id": "meeting-1",
+            "stage": "diarize",
+            "run_id": "run-1",
+            "doc": checkpoint_doc,
+            "updated_at": now,
+        }
+
         conn.execute(
             text(
                 """
@@ -191,9 +210,7 @@ def test_migrations_apply_idempotently_and_round_trip_every_table() -> None:
             {"key": "last-sync", "value": str(now)},
         )
 
-        meeting = conn.execute(
-            text("SELECT * FROM meetings WHERE id = 'meeting-1'")
-        ).mappings().first()
+        meeting = conn.execute(text("SELECT * FROM meetings WHERE id = 'meeting-1'")).mappings().first()
         assert dict(meeting or {}) == {
             "id": "meeting-1",
             "title": "Migration fixture",
@@ -209,22 +226,16 @@ def test_migrations_apply_idempotently_and_round_trip_every_table() -> None:
             "updated_at": now,
         }
 
-        recording = conn.execute(
-            text("SELECT * FROM recordings WHERE id = 'recording-1'")
-        ).mappings().first()
+        recording = conn.execute(text("SELECT * FROM recordings WHERE id = 'recording-1'")).mappings().first()
         assert recording is not None
         assert recording["meeting_id"] == "meeting-1"
         assert recording["sha256"] == "sha256-fixture"
 
-        artifact = conn.execute(
-            text("SELECT * FROM artifacts WHERE id = 'artifact-1'")
-        ).mappings().first()
+        artifact = conn.execute(text("SELECT * FROM artifacts WHERE id = 'artifact-1'")).mappings().first()
         assert artifact is not None
         assert artifact["recording_id"] == "recording-1"
 
-        speaker = conn.execute(
-            text("SELECT * FROM speakers WHERE id = 'speaker-1'")
-        ).mappings().first()
+        speaker = conn.execute(text("SELECT * FROM speakers WHERE id = 'speaker-1'")).mappings().first()
         assert speaker is not None
         assert speaker["name"] == "Fixture Speaker"
 

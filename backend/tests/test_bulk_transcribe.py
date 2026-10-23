@@ -14,7 +14,7 @@ from olive.db import create_db
 from olive.layout import meeting_paths
 from olive.providers.speechmatics import SpeechmaticsClient
 from olive.services.transcription import TranscriptionService
-from olive.workflows.queues import QUEUE_ASSEMBLYAI, QUEUE_MUSE, QUEUE_PIPELINE, QUEUE_SPEECHMATICS
+from olive.workflows.queues import QUEUE_ASSEMBLYAI, QUEUE_MUSE, QUEUE_SPEECHMATICS
 
 AUDIO_BYTES = b"fake audio bytes"
 
@@ -197,6 +197,50 @@ def test_bulk_transcribe_filters_by_date_and_rejects_bad_provider(
         handle.engine.dispose()
 
 
+async def test_start_transcription_enqueues_flat_local_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local transcription is a flat stage chain, not a single provider-queue job.
+
+    ``start_transcription`` must hand off to ``enqueue_local_transcription``
+    (which enqueues the decode stage and lets the stages hand off), and must not
+    put audio bytes in the durable payload.
+    """
+    import olive.services.transcription as tx_mod
+
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    _seed_meeting(handle, meetings_dir, "m-local-1", "Local Meeting", 1_700_000_000_000)
+    service = TranscriptionService({"db": handle.engine, "meetingsDir": meetings_dir})
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_enqueue(payload: dict[str, Any]) -> str:
+        calls.append(payload)
+        return "stage:m-local-1:deadbeef"
+
+    async def no_active(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(tx_mod, "enqueue_local_transcription", fake_enqueue)
+    monkeypatch.setattr(tx_mod, "has_active_local_stage_workflow", no_active)
+    try:
+        res = await service.start_transcription("m-local-1", {"provider": "local"})
+        assert res["status"] == "running"
+        assert res["jobId"].startswith("stage:m-local-1:")
+        assert res["alreadyRunning"] is False
+        assert len(calls) == 1
+        payload = calls[0]
+        assert payload["meetingId"] == "m-local-1"
+        assert payload["audioPath"].endswith("audio/test.m4a")
+        assert "workDir" not in payload
+        assert "audioBytes" not in payload
+        progress = service.get_transcription_progress("m-local-1")
+        assert progress is not None and progress.stage == "queued"
+    finally:
+        handle.engine.dispose()
+
+
 def test_bulk_transcribe_requires_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_transcription_enqueue_noop(monkeypatch)
     client, handle = _make_client(tmp_path)
@@ -214,11 +258,9 @@ def test_bulk_transcribe_requires_targets(tmp_path: Path, monkeypatch: pytest.Mo
 @pytest.mark.parametrize(
     ("provider", "expected_queue"),
     [
-        ("local", QUEUE_PIPELINE),
         ("speechmatics", QUEUE_SPEECHMATICS),
         ("assemblyai", QUEUE_ASSEMBLYAI),
         ("muse", QUEUE_MUSE),
-        ("local:cohere", QUEUE_PIPELINE),
     ],
 )
 async def test_start_transcription_enqueues_on_provider_queue(
@@ -226,9 +268,9 @@ async def test_start_transcription_enqueues_on_provider_queue(
 ) -> None:
     """The DBOS job queue is the SOLE path for background transcription work.
 
-    start_transcription must enqueue onto the provider's named queue with a
-    per-meeting deduplication id — never fire a bare asyncio task. Drivers
-    go through enqueue_driver_job (workflow context) because DBOS forbids
+    Cloud transcription must enqueue onto the provider's named queue with a
+    per-meeting deduplication id — never fire a bare asyncio task. The body
+    goes through enqueue_driver_job (workflow context) because DBOS forbids
     child-workflow enqueue from inside a step.
     """
     import olive.services.transcription as tx_mod

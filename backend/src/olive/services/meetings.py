@@ -899,6 +899,7 @@ def delete_meeting(db: Engine, meeting_id: str, meetings_dir: str | None = None)
         for tbl in [
             "meeting_speakers",
             "stage_runs",
+            "stage_checkpoints",
             "plaud_ingest_state",
             "chat_messages",
             "logs",

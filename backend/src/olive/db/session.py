@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import QueuePool
 
 from ..settings import resolve_paths
 from .migrations import run_migrations
@@ -43,7 +43,12 @@ def create_db(database_path: str) -> DbHandle:
         engine = create_engine(
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
+            # One connection keeps the in-memory database alive, but checkouts
+            # must be exclusive: a concurrent reader's rollback would otherwise
+            # discard another thread's uncommitted writes on that connection.
+            poolclass=QueuePool,
+            pool_size=1,
+            max_overflow=0,
         )
     else:
         db_file = Path(database_path)

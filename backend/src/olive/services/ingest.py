@@ -201,6 +201,7 @@ class IngestService:
         )
 
         # 1. SHA-256 Deduplication check
+        existing_meeting = None
         with self.db.connect() as conn:
             existing_rec = (
                 conn.execute(
@@ -220,23 +221,24 @@ class IngestService:
                     .mappings()
                     .first()
                 )
-                if existing_meeting:
-                    self.logger.info(
-                        "Audio upload deduplicated via SHA-256",
-                        {
-                            "category": "ingest",
-                            "sha256": sha256,
-                            "meetingId": existing_meeting["id"],
-                            "recordingId": existing_rec["id"],
-                        },
-                    )
-                    return {
-                        "meetingId": existing_meeting["id"],
-                        "recordingId": existing_rec["id"],
-                        "deduped": True,
-                        "meeting": to_meeting(existing_meeting).model_dump(),
-                        "audioPath": existing_rec["path"],
-                    }
+        if existing_rec and existing_meeting:
+            # Logging can check out its own DB connection; release this one first.
+            self.logger.info(
+                "Audio upload deduplicated via SHA-256",
+                {
+                    "category": "ingest",
+                    "sha256": sha256,
+                    "meetingId": existing_meeting["id"],
+                    "recordingId": existing_rec["id"],
+                },
+            )
+            return {
+                "meetingId": existing_meeting["id"],
+                "recordingId": existing_rec["id"],
+                "deduped": True,
+                "meeting": to_meeting(existing_meeting).model_dump(),
+                "audioPath": existing_rec["path"],
+            }
 
         # 2. Resolve filename, extension, and mime
         resolved = resolve_extension_and_mime(mime_in, filename)

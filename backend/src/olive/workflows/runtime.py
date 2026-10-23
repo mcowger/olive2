@@ -115,7 +115,37 @@ def _build_dbos_config(db_url: str) -> DBOSConfig:
         "notification_listener_polling_interval_sec": 0.05,
         "scheduler_polling_interval_sec": 1.0,
         "console_log_level": "ERROR",
+        "max_executor_threads": resolve_max_executor_threads(),
     }
+
+
+def resolve_max_executor_threads() -> int:
+    """Bound DBOS's executor thread pool.
+
+    DBOS defaults ``max_executor_threads`` to ``sys.maxsize`` — unbounded. That
+    pool runs *sync* workflows and sync steps; an unbounded pool turns a queue
+    backlog into unbounded thread growth (the 2026-10 transcription OOM: ~950
+    parked threads). Async workflows (including every local stage) run on
+    DBOS's single background event loop, so the flat stage pipeline does not
+    grow this pool — the backlog-to-threads amplifier is gone by construction.
+
+    The cap is therefore a safety net, not a limiter: sized from the sum of
+    queue worker concurrencies plus headroom, it never serializes healthy work
+    but a runaway (or a future sync workflow fan-out) still bottoms out here.
+
+    Override with ``OLIVE_DBOS_MAX_EXECUTOR_THREADS`` (must be >= 1).
+    """
+    env_raw = (os.environ.get("OLIVE_DBOS_MAX_EXECUTOR_THREADS") or "").strip()
+    if env_raw:
+        try:
+            parsed = int(env_raw)
+        except ValueError:
+            parsed = 0
+        if parsed >= 1:
+            return parsed
+
+    queue_slots = sum(spec.worker_concurrency for spec in STAGE_QUEUE_SPECS)
+    return max(16, queue_slots + 16)
 
 
 async def ensure_dbos_launched_async(
@@ -231,5 +261,6 @@ __all__ = [
     "mark_shutting_down",
     "reset_shutdown_flag",
     "resolve_dbos_database_url",
+    "resolve_max_executor_threads",
     "shutdown_dbos",
 ]

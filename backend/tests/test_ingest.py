@@ -12,6 +12,7 @@ from sqlalchemy import text
 from olive.app import create_app
 from olive.db import create_db
 from olive.layout import meeting_paths
+from olive.logging_db import set_log_database
 from olive.services.ingest import IngestService
 
 SAMPLE_AUDIO = b"arbitrary sample audio bytes for testing"
@@ -73,10 +74,23 @@ def test_ingests_audio_file_deduplicates_and_streams_range(tmp_path: Path) -> No
     assert audio_disk_path.read_bytes() == SAMPLE_AUDIO
 
     # 2. Deduplication on identical upload
-    second_res = client.post(
-        "/api/ingest",
-        files={"file": ("duplicate.m4a", SAMPLE_AUDIO, "audio/mp4")},
-    )
+    # Deduplication logs to the same DB. Its read connection must be returned
+    # before logging checks out the in-memory pool's only connection.
+    set_log_database(handle)
+    try:
+        second_res = client.post(
+            "/api/ingest",
+            files={"file": ("duplicate.m4a", SAMPLE_AUDIO, "audio/mp4")},
+        )
+    finally:
+        set_log_database(None)
+    with handle.engine.connect() as conn:
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM logs WHERE message = 'Audio upload deduplicated via SHA-256'")
+            ).scalar()
+            == 1
+        )
     assert second_res.status_code == 200
     second_data = second_res.json()
     assert second_data["deduped"] is True

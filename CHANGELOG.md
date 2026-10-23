@@ -8,6 +8,19 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-23]
+
+### Changed
+
+- Local transcription stages now pass intermediate results through the application database instead of JSON files in meeting folders. Checkpoints survive restarts and are removed when the run finishes or is cancelled.
+- **Local transcription stages run independently** — the local pipeline (`decode → diarize → speaker match ‖ ASR → align`) now runs each stage as its own durable queue job that hands off to the next and returns, instead of one long-lived job waiting on every stage. Meetings no longer block each other, the queue position of each stage is visible in Logs → Queues, and queued or half-finished local transcriptions resume automatically after a restart. A new operator knob, `OLIVE_STAGE_TIMEOUT_SEC`, caps how long any one stage may run; `OLIVE_DBOS_MAX_EXECUTOR_THREADS` caps the background worker pool. Because of this, starting a local transcription returns immediately with `status: "running"` (the app follows progress on the existing progress stream) instead of blocking until the transcript is written.
+
+### Fixed
+
+- **Local transcription could hang the whole queue** — running two local transcriptions at once, or a single stage that never returned, could leave every later transcription stuck at "queued" indefinitely (and grow memory until the process ran out). A stage that exceeds its deadline now fails only its own meeting with a retryable error, and the rest of the queue keeps moving.
+- **Cancelling a local transcription now stops the running stage promptly** — the in-flight stage is cancelled instead of finishing in the background, and no later stage is queued for that meeting.
+- **Transcripts are saved even if nobody is watching** — the final stage now persists the transcript itself, so a local transcription that finishes after a restart (or after the original request was dropped) still produces its transcript, speakers, and summary instead of being lost.
+
 ## [2026-10-22]
 
 ### Changed

@@ -87,3 +87,42 @@ def test_finished_run_is_not_reported(dbos_path: Path) -> None:
     )
 
     assert MEETING_ID not in tw.get_dbos_active_progress_map(None)
+
+
+def test_stage_workflow_maps_to_meeting_by_id_and_args(dbos_path: Path) -> None:
+    """Flat stages pass (stage, payload); progress must still find the meeting."""
+    _make_dbos_db(
+        dbos_path,
+        [
+            (
+                "stage:" + MEETING_ID + ":abcd1234:asr",
+                "PENDING",
+                "<temp>.run_local_stage",
+                "asr",
+                None,
+            )
+        ],
+    )
+    # Store args in the stage-workflow shape: (stage_name, payload).
+    import sqlite3
+
+    ser = DefaultSerializer()
+    with sqlite3.connect(dbos_path) as conn:
+        conn.execute(
+            "UPDATE workflow_input SET inputs = ? WHERE workflow_uuid = ?",
+            (
+                ser.serialize(
+                    {
+                        "args": ["asr", {"taskId": "t1", "meetingId": MEETING_ID}],
+                        "kwargs": {},
+                    }
+                ),
+                "stage:" + MEETING_ID + ":abcd1234:asr",
+            ),
+        )
+        conn.commit()
+
+    progress = tw.get_dbos_active_progress_map(None)
+
+    assert MEETING_ID in progress
+    assert progress[MEETING_ID]["stage"] == "transcribing"

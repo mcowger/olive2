@@ -118,6 +118,15 @@ def _seed_full_meeting(engine, meetings_dir: str) -> tuple[str, Path]:
         conn.execute(
             text(
                 """
+                INSERT INTO stage_checkpoints (meeting_id, stage, run_id, doc, updated_at)
+                VALUES (:mid, 'diarize', 'run-delete', '{}', :now)
+                """
+            ),
+            {"mid": meeting_id, "now": now},
+        )
+        conn.execute(
+            text(
+                """
                 INSERT INTO chat_messages (
                   id, meeting_id, role, content, provider, model, usage, created_at
                 ) VALUES ('chat-delete-1', :mid, 'user', 'hello', NULL, NULL, NULL, :now)
@@ -171,6 +180,7 @@ def test_delete_meeting_removes_meeting_related_rows_and_files(tmp_path: Path) -
             "artifacts",
             "meeting_speakers",
             "stage_runs",
+            "stage_checkpoints",
             "chat_messages",
             "logs",
         ]:

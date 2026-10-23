@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from local_pipeline_helpers import wait_for_local_run
 from olive.app import create_app
 from olive.db import create_db
 from olive.layout import meeting_paths
@@ -30,7 +31,8 @@ from olive.ml import (
     resample,
     score_against_trusted_vectors,
 )
-from olive.services.transcription import STAGE_LOCAL_TRANSCRIBE, TranscriptionService
+from olive.services.transcription import TranscriptionService
+from olive.workflows.transcription_workflow import STAGE_LOCAL_TRANSCRIBE, STAGE_SEQUENCE
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "audio"
 FIXTURE_MULTI_SPEAKER_PATH = FIXTURES_DIR / "sample-multi-speaker.wav"
@@ -291,21 +293,26 @@ async def test_end_to_end_meeting_transcription_using_local_provider(tmp_path: P
         }
     )
 
-    result = await service.transcribe_meeting(meeting_id, {"provider": "local"})
-    assert result["status"] == "done"
-    assert result["jobId"].startswith("local-")
-    assert result["transcriptArtifactId"]
+    started = await service.transcribe_meeting(meeting_id, {"provider": "local"})
+    assert started["status"] == "running"
+    assert started["jobId"].startswith(f"stage:{meeting_id}:")
+
+    # Fire-and-forget: the pipeline finishes on its own stage chain.
+    stages = await wait_for_local_run(handle.engine, meeting_id)
+    assert stages[STAGE_LOCAL_TRANSCRIBE] == "done"
+    assert [stages[s] for s in STAGE_SEQUENCE] == ["done"] * len(STAGE_SEQUENCE)
 
     with handle.engine.connect() as conn:
-        stage_run = (
+        meeting = (
             conn.execute(
-                text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :st"),
-                {"mid": meeting_id, "st": STAGE_LOCAL_TRANSCRIBE},
+                text("SELECT status, primary_transcript_artifact_id FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
             )
             .mappings()
             .one()
         )
-        assert stage_run["status"] == "done"
+    assert meeting["status"] == "ready"
+    assert meeting["primary_transcript_artifact_id"]
 
     handle.engine.dispose()
 
@@ -393,7 +400,17 @@ async def test_cancel_inflight_local_transcription_via_service_and_api(tmp_path:
         }
     )
     client = TestClient(app)
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO stage_checkpoints (meeting_id, stage, run_id, doc, updated_at) "
+                "VALUES (:mid, 'diarize', 'run-cancel', '{}', :now)"
+            ),
+            {"mid": meeting_id, "now": now},
+        )
     cancel_res = client.post(f"/api/meetings/{meeting_id}/transcribe/cancel")
     assert cancel_res.status_code == 200
     assert cancel_res.json()["success"] is True
+    with handle.engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM stage_checkpoints")).scalar() == 0
     handle.engine.dispose()

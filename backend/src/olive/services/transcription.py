@@ -25,7 +25,6 @@ from ..logging_db import logger as default_logger
 from ..ml import (
     AbortController,
     DiscoveredSpeakerVoiceprint,
-    LocalTranscriptionWorkerRunner,
 )
 from ..ml.identify import identify_cloud_transcript_speakers
 from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
@@ -51,22 +50,29 @@ from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
     QUEUE_MUSE,
-    QUEUE_PIPELINE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
     QUEUE_SPEECHMATICS,
     QUEUE_SUMMARIZE,
+    STAGE_LOCAL_TRANSCRIBE,
+    STAGE_SEQUENCE,
+    TaskExecutionContext,
     cancel_dbos_workflows_for_meeting,
+    configure_recovery_runtime,
     enqueue_driver_job,
+    enqueue_local_transcription,
     enqueue_stage_job,
     ensure_dbos_launched_async,
     get_dbos_active_progress_map,
+    has_active_local_stage_workflow,
+    local_run_workflow_prefix,
+    local_stage_workflow_id,
+    register_task_context,
 )
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
 STAGE_MUSE_TRANSCRIBE = "muse_transcribe"
-STAGE_LOCAL_TRANSCRIBE = "local_transcribe"
 STAGE_SPEAKER_REIDENTIFY = "speaker_reidentify"
 PROVIDER_SPEECHMATICS = "speechmatics"
 PROVIDER_ASSEMBLYAI = "assemblyai"
@@ -75,10 +81,12 @@ PROVIDER_LOCAL = "local"
 
 TranscriptionProviderName = Literal["speechmatics", "assemblyai", "muse", "local"]
 
-# Durable-queue routing for background transcription work (see AGENTS.md:
-# the DBOS job queue is the SOLE acceptable path for enqueuing work).
+# Durable-queue routing for cloud transcription work (see AGENTS.md: the DBOS
+# job queue is the SOLE acceptable path for enqueuing work). ``local`` is not
+# here on purpose: it is not a single queue job any more — it is a flat chain of
+# per-stage workflows (decode -> diarize -> {embed || asr} -> align), so its
+# entry point is ``enqueue_local_transcription`` instead.
 TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {
-    PROVIDER_LOCAL: QUEUE_PIPELINE,
     PROVIDER_SPEECHMATICS: QUEUE_SPEECHMATICS,
     PROVIDER_ASSEMBLYAI: QUEUE_ASSEMBLYAI,
     PROVIDER_MUSE: QUEUE_MUSE,
@@ -253,11 +261,13 @@ class TranscriptionService:
         self.cloud_speaker_identifier = opts.get("cloudSpeakerIdentifier") or opts.get(
             "cloud_speaker_identifier"
         )
-        self.local_pipeline = (
-            local_pipeline
-            or opts.get("localPipeline")
-            or opts.get("local_pipeline")
-            or LocalTranscriptionWorkerRunner()
+        self.local_pipeline = local_pipeline or opts.get("localPipeline") or opts.get("local_pipeline")
+        # Engine options for the local ML stages (asrConfig / diarizerConfig /
+        # voiceprintConfig / unloadPerStage). The flat stage steps build their
+        # own ``LocalTranscriptionPipeline`` from this unless a pipeline is
+        # injected above (tests) or registered per run.
+        self.pipeline_options: dict[str, Any] = dict(
+            opts.get("pipelineOptions") or opts.get("pipeline_options") or {}
         )
         self.default_provider: TranscriptionProviderName = (
             default_provider
@@ -286,6 +296,18 @@ class TranscriptionService:
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
         self._reidentify_statuses: dict[str, SpeakerReidentificationStatus] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Local transcription stages run fire-and-forget, so their progress,
+        # persistence and clock come from these process-wide hooks rather than a
+        # per-request closure (see workflows/transcription_workflow.py).
+        configure_recovery_runtime(
+            db=self.db,
+            progress_sink=self.emit_progress,
+            complete_sink=self.complete_local_transcript,
+            config_dir=self.config_dir,
+            meetings_dir=self.meetings_dir or None,
+            now_fn=self.now,
+        )
 
     @property
     def speechmatics(self) -> SpeechmaticsClient:
@@ -485,21 +507,6 @@ class TranscriptionService:
                         {"jobId": active.job_id, "error": str(exc)},
                     )
 
-        # Staged local jobs run as DBOS workflows; aborting the in-memory
-        # job alone leaves them running, so cancel them explicitly.
-        try:
-            await cancel_dbos_workflows_for_meeting(
-                meeting_id,
-                db=self.db,
-                config_dir=self.config_dir,
-                meetings_dir=self.meetings_dir,
-            )
-        except Exception as exc:
-            self.logger.warn(
-                "Failed to cancel DBOS workflows during cancellation",
-                {"meetingId": meeting_id, "error": str(exc)},
-            )
-
         cancel_time = self.now()
         self._mark_reidentify_cancelled(meeting_id, cancel_time)
         self.emit_progress(
@@ -518,10 +525,14 @@ class TranscriptionService:
                     UPDATE stage_runs
                     SET status = 'cancelled', last_error = 'Cancelled by user',
                         finished_at = :t, updated_at = :t
-                    WHERE meeting_id = :mid AND status = 'running'
+                    WHERE meeting_id = :mid AND status IN ('pending', 'queued', 'running')
                     """
                 ),
                 {"t": cancel_time, "mid": meeting_id},
+            )
+            conn.execute(
+                text("DELETE FROM stage_checkpoints WHERE meeting_id = :mid"),
+                {"mid": meeting_id},
             )
             meeting = (
                 conn.execute(
@@ -539,6 +550,23 @@ class TranscriptionService:
                     ),
                     {"st": next_status, "t": cancel_time, "id": meeting_id},
                 )
+
+        # Stop the durable work only after the rows are terminal: a stage claims
+        # its successor with a conditional UPDATE on 'pending', so closing that
+        # gate first means nothing new can be enqueued between the snapshot and
+        # the cancel below.
+        try:
+            await cancel_dbos_workflows_for_meeting(
+                meeting_id,
+                db=self.db,
+                config_dir=self.config_dir,
+                meetings_dir=self.meetings_dir,
+            )
+        except Exception as exc:
+            self.logger.warn(
+                "Failed to cancel DBOS workflows during cancellation",
+                {"meetingId": meeting_id, "error": str(exc)},
+            )
 
         return {"success": True, "message": "Transcription cancelled successfully"}
 
@@ -590,6 +618,12 @@ class TranscriptionService:
             opts.get("provider") or self.default_provider,
             default=self.default_provider,
         )
+
+        if provider == PROVIDER_LOCAL:
+            # Local transcription is a flat chain of stage workflows, so the
+            # entry point is the pipeline itself — no driver workflow to poll.
+            return await self._start_local_pipeline(meeting_id, opts)
+
         queue_name = TRANSCRIBE_QUEUE_BY_PROVIDER[provider]
         job_id = f"transcribe:{meeting_id}:{uuid.uuid4().hex[:8]}"
         await ensure_dbos_launched_async(
@@ -618,6 +652,75 @@ class TranscriptionService:
             "meetingId": meeting_id,
             "alreadyRunning": False,
         }
+
+    async def _start_local_pipeline(
+        self,
+        meeting_id: str,
+        opts: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enqueue the flat local stage chain and describe the run to the caller."""
+        if await has_active_local_stage_workflow(
+            meeting_id,
+            config_dir=self.config_dir,
+            meetings_dir=self.meetings_dir or None,
+        ):
+            if not self._local_run_is_terminal(meeting_id):
+                return {
+                    "status": "running",
+                    "jobId": self._local_run_job_id(meeting_id) or f"active-{meeting_id[:8]}",
+                    "meetingId": meeting_id,
+                    "alreadyRunning": True,
+                }
+            # The run row is already terminal, so whatever is still queued or
+            # running belongs to a failed run (for example a slow parallel
+            # stage). Clear it, or a retry would answer "already running"
+            # until that orphan's own timeout expires, hours later.
+            try:
+                await cancel_dbos_workflows_for_meeting(
+                    meeting_id,
+                    db=self.db,
+                    config_dir=self.config_dir,
+                    meetings_dir=self.meetings_dir or None,
+                )
+            except Exception as exc:
+                self.logger.warn(
+                    "Failed to clear a failed local run before retry",
+                    {"meetingId": meeting_id, "error": str(exc)},
+                )
+
+        started = await self.transcribe_meeting_local(meeting_id, opts)
+        status = str(started.get("status") or "running")
+        return {
+            "status": status,
+            "jobId": str(started.get("jobId") or ""),
+            "meetingId": meeting_id,
+            "alreadyRunning": False,
+            **({"error": started["error"]} if started.get("error") else {}),
+        }
+
+    def _local_run_is_terminal(self, meeting_id: str) -> bool:
+        with self.db.connect() as conn:
+            row = (
+                conn.execute(
+                    text("SELECT status FROM stage_runs WHERE meeting_id = :mid AND stage = :stage"),
+                    {"mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
+        return bool(row) and str(row["status"]) in ("error", "cancelled")
+
+    def _local_run_job_id(self, meeting_id: str) -> str | None:
+        with self.db.connect() as conn:
+            row = (
+                conn.execute(
+                    text("SELECT provider_job_id FROM stage_runs WHERE meeting_id = :mid AND stage = :stage"),
+                    {"mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
+        return str(row["provider_job_id"]) if row and row.get("provider_job_id") else None
 
     startTranscription = start_transcription
 
@@ -1100,12 +1203,12 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any],
     ) -> None:
-        """DBOS-queue worker body for one meeting's transcription.
+        """DBOS workflow body for one cloud-provider transcription.
 
-        This is the SOLE path by which transcription work executes in the
-        background: :meth:`start_transcription` enqueues it via
-        ``enqueue_driver_job`` (workflow context, so nested stage enqueues
-        stay legal) and never via ``asyncio.create_task``.
+        Cloud providers are still a single durable job (they poll an external
+        API and then persist once); only the local pipeline fans out into
+        stages. Enqueued via ``enqueue_driver_job`` because the body may enqueue
+        follow-up work (auto-summarize), which DBOS forbids from inside a step.
         """
         try:
             await self.transcribe_meeting(meeting_id, options)
@@ -1519,249 +1622,94 @@ class TranscriptionService:
         stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
         current_time = self.now()
 
-        with self.db.begin() as conn:
-            if stage_run:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'running', attempts = :attempts, last_error = NULL,
-                            started_at = :now, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "attempts": int(stage_run["attempts"]) + 1,
-                        "now": current_time,
-                        "id": stage_run["id"],
-                    },
-                )
-            else:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO stage_runs (
-                          id, meeting_id, stage, status, provider_job_id, attempts,
-                          last_error, started_at, finished_at, created_at, updated_at
-                        ) VALUES (
-                          :id, :mid, :stage, 'running', :job_id, 1,
-                          NULL, :now, NULL, :now, :now
-                        )
-                        """
-                    ),
-                    {
-                        "id": stage_run_id,
-                        "mid": meeting_id,
-                        "stage": STAGE_LOCAL_TRANSCRIBE,
-                        "job_id": f"local-{stage_run_id[:8]}",
-                        "now": current_time,
-                    },
-                )
-
-        try:
-            enrolled_speakers = await self._get_enrolled_speakers()
-            candidate_speakers: list[str] = list(opts.get("candidateSpeakers") or [])
-            title_lower = meeting["title"].lower()
-            if not candidate_speakers:
-                for spk in enrolled_speakers:
-                    parts = [p for p in re.split(r"\s+", spk.name.strip().lower()) if len(p) >= 3]
-                    if any(part in title_lower for part in parts):
-                        candidate_speakers.append(spk.name)
-
-            expected_speaker_count = opts.get("expectedSpeakerCount")
-            if not expected_speaker_count:
-                if re.search(r"1[:\-_/]?1|1-on-1|one-on-one|interview", meeting["title"], re.I):
-                    expected_speaker_count = 2
-                elif candidate_speakers:
-                    expected_speaker_count = len(candidate_speakers)
-
-            transcribe_fn = self.local_pipeline.transcribe
-            pipe_res: Any = await transcribe_fn(
-                {
-                    "meetingId": meeting_id,
-                    "audioPath": audio_full_path,
-                    "language": opts.get("language"),
-                    "enrolledSpeakers": enrolled_speakers,
-                    "candidateSpeakers": candidate_speakers if candidate_speakers else None,
-                    "expectedSpeakerCount": expected_speaker_count,
-                    "similarityThreshold": opts.get("similarityThreshold"),
-                    "clusteringThreshold": opts.get("clusteringThreshold"),
-                    "modelId": opts.get("modelId"),
-                    "signal": opts.get("signal"),
-                    "onProgress": opts.get("onProgress"),
-                    "db": self.db,
-                    "now_fn": self.now,
-                    "configDir": self.config_dir,
-                    "meetingsDir": self.meetings_dir,
-                    "workflow_id": f"local-{stage_run_id[:8]}",
-                }
-            )
-            transcript: Transcript = (
-                pipe_res.transcript
-                if hasattr(pipe_res, "transcript")
-                else Transcript.model_validate(pipe_res["transcript"])
-            )
-            discovered_speakers: list[DiscoveredSpeakerVoiceprint] = (
-                pipe_res.discoveredSpeakers
-                if hasattr(pipe_res, "discoveredSpeakers")
-                else [
-                    d if isinstance(d, DiscoveredSpeakerVoiceprint) else DiscoveredSpeakerVoiceprint(**d)
-                    for d in pipe_res.get("discoveredSpeakers", [])
-                ]
-            )
-
-            paths = ensure_meeting_folder(
-                meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
-            )
-            t_text = transcript_to_text(transcript)
-            t_json = f"{json.dumps(transcript.model_dump(exclude_none=True), indent=2)}\n"
-
-            json_art_id = await self._ensure_artifact(
-                meeting["id"],
-                recording["id"],
-                "transcript",
-                "json",
-                "transcripts/local.json",
-                t_json,
-                paths.transcripts_dir,
-                PROVIDER_LOCAL,
-            )
-            txt_art_id = await self._ensure_artifact(
-                meeting["id"],
-                recording["id"],
-                "transcript",
-                "txt",
-                "transcripts/local.txt",
-                f"{t_text}\n",
-                paths.transcripts_dir,
-                PROVIDER_LOCAL,
-            )
-
-            await self._persist_local_discovered_speakers(meeting["id"], json_art_id, discovered_speakers)
-
-            completed_at = self.now()
-            with self.db.begin() as conn:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE meetings
-                        SET primary_transcript_artifact_id = :aid, status = 'ready',
-                            last_error = NULL, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {"aid": json_art_id, "now": completed_at, "id": meeting["id"]},
-                )
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'done', last_error = NULL,
-                            finished_at = :now, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {"now": completed_at, "id": stage_run_id},
-                )
-
-            asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
-
-            self.emit_progress(
-                meeting["id"],
-                {
-                    "stage": "done",
-                    "percent": 100,
-                    "message": "Transcription completed successfully.",
-                },
-            )
-
+        if _signal_aborted(opts.get("signal")):
+            self._mark_local_run_cancelled(meeting_id, stage_run_id, current_time)
             return {
                 "stageRunId": stage_run_id,
-                "jobId": f"local-{stage_run_id[:8]}",
-                "status": "done",
-                "transcriptArtifactId": json_art_id,
-                "transcriptTextArtifactId": txt_art_id,
+                "jobId": "",
+                "status": "cancelled",
+                "error": "Cancelled by user",
             }
+
+        enrolled_speakers = await self._get_enrolled_speakers()
+        candidate_speakers: list[str] = list(opts.get("candidateSpeakers") or [])
+        title_lower = meeting["title"].lower()
+        if not candidate_speakers:
+            for spk in enrolled_speakers:
+                parts = [p for p in re.split(r"\s+", spk.name.strip().lower()) if len(p) >= 3]
+                if any(part in title_lower for part in parts):
+                    candidate_speakers.append(spk.name)
+
+        expected_speaker_count = opts.get("expectedSpeakerCount")
+        if not expected_speaker_count:
+            if re.search(r"1[:\-_/]?1|1-on-1|one-on-one|interview", meeting["title"], re.I):
+                expected_speaker_count = 2
+            elif candidate_speakers:
+                expected_speaker_count = len(candidate_speakers)
+
+        task_id = str(uuid.uuid4())
+        pipeline_options = dict(opts.get("pipelineOptions") or self.pipeline_options or {})
+        payload: dict[str, Any] = {
+            "taskId": task_id,
+            "meetingId": meeting_id,
+            "audioPath": audio_full_path,
+            "language": opts.get("language"),
+            "modelId": opts.get("modelId"),
+            "enrolledSpeakers": [
+                s.model_dump() if isinstance(s, EnrolledSpeaker) else s for s in enrolled_speakers
+            ],
+            "candidateSpeakers": candidate_speakers if candidate_speakers else None,
+            "expectedSpeakerCount": expected_speaker_count,
+            "similarityThreshold": opts.get("similarityThreshold"),
+            "decisionMargin": opts.get("decisionMargin"),
+            "clusteringThreshold": opts.get("clusteringThreshold"),
+            "wholeFileAsr": bool(opts.get("wholeFileAsr")),
+            "pipelineOptions": pipeline_options,
+        }
+        job_id = local_stage_workflow_id(meeting_id, task_id, STAGE_SEQUENCE[0])
+
+        # An injected pipeline (tests, alternate engines) is shared with the
+        # stage steps through the run's task context; the align stage releases it.
+        injected = self.local_pipeline
+        if injected is not None:
+            register_task_context(
+                TaskExecutionContext(
+                    task_id=task_id,
+                    meeting_id=meeting_id,
+                    pipeline=injected,
+                    db=self.db,
+                    now_fn=self.now,
+                    workflow_id=local_run_workflow_prefix(meeting_id, task_id),
+                )
+            )
+
+        try:
+            await enqueue_local_transcription(payload)
         except Exception as exc:
             err_msg = str(exc)
-            sig = opts.get("signal")
-            is_set_fn = getattr(sig, "is_set", None)
-            is_cancelled = bool(
-                getattr(sig, "aborted", False)
-                or (callable(is_set_fn) and is_set_fn())
-                or "cancel" in err_msg.lower()
-            )
-            err_time = self.now()
-
-            self.emit_progress(
-                meeting_id,
-                {
-                    "stage": "cancelled" if is_cancelled else "error",
-                    "percent": 0,
-                    "message": "Transcription was cancelled." if is_cancelled else err_msg,
-                    "error": None if is_cancelled else err_msg,
-                },
-            )
-
-            if is_cancelled:
-                self.logger.info("Local transcription cancelled by user", {"meetingId": meeting_id})
-                with self.db.begin() as conn:
-                    conn.execute(
-                        text(
-                            """
-                            UPDATE stage_runs
-                            SET status = 'cancelled', last_error = 'Cancelled by user',
-                                finished_at = :t, updated_at = :t
-                            WHERE id = :id
-                            """
-                        ),
-                        {"t": err_time, "id": stage_run_id},
-                    )
-                    existing_m = (
-                        conn.execute(
-                            text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
-                            {"id": meeting_id},
-                        )
-                        .mappings()
-                        .first()
-                    )
-                    next_st = (
-                        "ready"
-                        if (existing_m and existing_m.get("primary_transcript_artifact_id"))
-                        else "pending"
-                    )
-                    conn.execute(
-                        text(
-                            "UPDATE meetings SET status = :st, last_error = NULL, updated_at = :t WHERE id = :id"
-                        ),
-                        {"st": next_st, "t": err_time, "id": meeting_id},
-                    )
-                return {
-                    "stageRunId": stage_run_id,
-                    "jobId": "",
-                    "status": "cancelled",
-                    "error": "Cancelled by user",
-                }
-
             self.logger.error(
-                "Failed to run local transcription", {"meetingId": meeting_id, "error": err_msg}
+                "Failed to enqueue local transcription",
+                {"category": "transcription", "meetingId": meeting_id, "error": err_msg},
             )
             with self.db.begin() as conn:
                 conn.execute(
                     text(
                         """
                         UPDATE stage_runs
-                        SET status = 'error', last_error = :err,
-                            finished_at = :t, updated_at = :t
+                        SET status = 'error', last_error = :err, updated_at = :t
                         WHERE id = :id
                         """
                     ),
-                    {"err": err_msg, "t": err_time, "id": stage_run_id},
+                    {"err": err_msg, "t": self.now(), "id": stage_run_id},
                 )
                 conn.execute(
                     text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
-                    {"err": err_msg, "t": err_time, "id": meeting_id},
+                    {"err": err_msg, "t": self.now(), "id": meeting_id},
                 )
+            self.emit_progress(
+                meeting_id,
+                {"stage": "error", "percent": 0, "message": err_msg, "error": err_msg},
+            )
             return {
                 "stageRunId": stage_run_id,
                 "jobId": "",
@@ -1769,15 +1717,80 @@ class TranscriptionService:
                 "error": err_msg,
             }
 
+        self.emit_progress(
+            meeting_id,
+            {
+                "stage": "queued",
+                "percent": 2,
+                "message": "Queued for audio decode...",
+            },
+        )
+        return {
+            "stageRunId": stage_run_id,
+            "jobId": job_id,
+            "status": "running",
+            "meetingId": meeting_id,
+        }
+
+    def _mark_local_run_cancelled(self, meeting_id: str, stage_run_id: str, at: int) -> None:
+        self.logger.info("Local transcription cancelled by user", {"meetingId": meeting_id})
+        with self.db.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO stage_runs (
+                      id, meeting_id, stage, status, provider_job_id, attempts,
+                      last_error, started_at, finished_at, created_at, updated_at
+                    ) VALUES (
+                      :id, :mid, :stage, 'cancelled', NULL, 0,
+                      'Cancelled by user', NULL, :t, :t, :t
+                    )
+                    ON CONFLICT(meeting_id, stage) DO UPDATE SET
+                      status = 'cancelled', last_error = 'Cancelled by user',
+                      finished_at = excluded.finished_at, updated_at = excluded.updated_at
+                    """
+                ),
+                {"id": stage_run_id, "mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE, "t": at},
+            )
+            existing_m = (
+                conn.execute(
+                    text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            next_st = (
+                "ready" if (existing_m and existing_m.get("primary_transcript_artifact_id")) else "pending"
+            )
+            conn.execute(
+                text("UPDATE meetings SET status = :st, last_error = NULL, updated_at = :t WHERE id = :id"),
+                {"st": next_st, "t": at, "id": meeting_id},
+            )
+            conn.execute(
+                text("DELETE FROM stage_checkpoints WHERE meeting_id = :mid"),
+                {"mid": meeting_id},
+            )
+        self.emit_progress(
+            meeting_id,
+            {"stage": "cancelled", "percent": 0, "message": "Transcription was cancelled."},
+        )
+
     transcribeMeetingLocal = transcribe_meeting_local
 
-    async def complete_recovered_local_transcript(
+    async def complete_local_transcript(
         self,
         meeting_id: str,
         result: dict[str, Any],
         workflow_id: str | None,
     ) -> None:
-        """Persist a local transcript that DBOS finished after a restart (no live caller)."""
+        """Persist a finished local transcript (the align stage's final action).
+
+        Local stage workflows are fire-and-forget — nobody awaits the pipeline —
+        so persistence belongs to the pipeline itself. This runs as the last
+        stage's finalization, and doubles as the recovery path when DBOS resumes
+        an interrupted run after a restart (both cases are idempotent).
+        """
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
@@ -1842,21 +1855,41 @@ class TranscriptionService:
             conn.execute(
                 text(
                     """
-                    UPDATE stage_runs
-                    SET status = 'done', last_error = NULL, finished_at = :now, updated_at = :now
-                    WHERE meeting_id = :mid AND stage = :stage AND status = 'running'
+                    INSERT INTO stage_runs (
+                      id, meeting_id, stage, status, provider_job_id, attempts,
+                      last_error, started_at, finished_at, created_at, updated_at
+                    ) VALUES (
+                      :sid, :mid, :stage, 'done', :wf, 0,
+                      NULL, :now, :now, :now, :now
+                    )
+                    ON CONFLICT(meeting_id, stage) DO UPDATE SET
+                      status = 'done', last_error = NULL,
+                      finished_at = excluded.finished_at, updated_at = excluded.updated_at
                     """
                 ),
-                {"now": now, "mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE},
+                {
+                    "sid": str(uuid.uuid4()),
+                    "now": now,
+                    "mid": meeting_id,
+                    "stage": STAGE_LOCAL_TRANSCRIBE,
+                    "wf": workflow_id,
+                },
             )
         self.emit_progress(
             meeting_id,
             {"stage": "done", "percent": 100, "message": "Transcription completed successfully."},
         )
         self.logger.info(
-            "Persisted recovered local transcript",
+            "Persisted local transcript",
             {"category": "transcription", "meetingId": meeting_id, "workflowId": workflow_id},
         )
+
+        # The durable follow-up chain continues here: summarizing used to be
+        # kicked off by the caller that awaited the pipeline.
+        await self._enqueue_auto_summarize(meeting_id)
+
+    # Backwards-compatible alias (the finalize path used to be recovery-only).
+    complete_recovered_local_transcript = complete_local_transcript
 
     async def transcribe_meeting_speechmatics(
         self,

@@ -80,7 +80,6 @@ _LAZY_ATTRS: dict[str, str] = {
     "updateVoiceprintCentroid": "scoring",
     "AbortController": "worker",
     "AbortSignal": "worker",
-    "LocalTranscriptionWorkerRunner": "worker",
 }
 
 
@@ -122,7 +121,6 @@ __all__ = [
     "LocalSpeakerSegment",
     "LocalTranscriptionPipeline",
     "LocalTranscriptionResult",
-    "LocalTranscriptionWorkerRunner",
     "MockLocalAsrEngine",
     "PyannoteSpeakerDiarizer",
     "SPEECH_ENHANCEMENT_FILTER",

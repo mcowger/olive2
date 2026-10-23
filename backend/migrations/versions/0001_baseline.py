@@ -44,6 +44,7 @@ def downgrade() -> None:
         "sync_state",
         "plaud_deleted_files",
         "plaud_ingest_state",
+        "stage_checkpoints",
         "stage_runs",
         "meeting_speakers",
         "speakers",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-QUEUE_PIPELINE = "pipeline"
 QUEUE_PLAUD_SYNC = "plaud_sync"
 QUEUE_FFMPEG = "ffmpeg"
 QUEUE_DIARIZE = "diarize"
@@ -25,7 +24,6 @@ class StageQueueSpec:
 
 
 STAGE_QUEUE_SPECS: tuple[StageQueueSpec, ...] = (
-    StageQueueSpec(name=QUEUE_PIPELINE, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_PLAUD_SYNC, worker_concurrency=1),
     StageQueueSpec(name=QUEUE_FFMPEG, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_DIARIZE, worker_concurrency=1),
@@ -45,7 +43,6 @@ __all__ = [
     "QUEUE_ASR",
     "QUEUE_DIARIZE",
     "QUEUE_FFMPEG",
-    "QUEUE_PIPELINE",
     "QUEUE_PLAUD_SYNC",
     "QUEUE_SPEAKER_EMBED",
     "QUEUE_SPEECHMATICS",

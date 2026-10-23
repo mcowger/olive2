@@ -94,6 +94,23 @@ class StageRunModel(Base):
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class StageCheckpointModel(Base):
+    """Intermediate output of one local transcription stage, keyed per meeting.
+
+    Each JSON document carries its run id. Writes require an active run, and
+    terminal cleanup deletes only that run's rows so late writes or cleanup
+    from a cancelled run cannot replace a newer run's inputs.
+    """
+
+    __tablename__ = "stage_checkpoints"
+
+    meeting_id: Mapped[str] = mapped_column(Text, ForeignKey("meetings.id"), primary_key=True)
+    stage: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    doc: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class PlaudIngestStateModel(Base):
     __tablename__ = "plaud_ingest_state"
 
@@ -209,6 +226,7 @@ __all__ = [
     "PlaudDeletedFileModel",
     "RecordingModel",
     "SpeakerModel",
+    "StageCheckpointModel",
     "StageRunModel",
     "SyncStateModel",
     "TemplateModel",

@@ -436,9 +436,37 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        from .workflows import reset_shutdown_flag, shutdown_dbos
+        from .workflows import ensure_dbos_launched_async, reset_shutdown_flag, shutdown_dbos
+        from .workflows.transcription_workflow import cancel_legacy_local_transcription_workflows
 
         reset_shutdown_flag()
+        # Register the process-wide stage hooks (progress/persist/clock) before
+        # DBOS can resume anything, then launch the runtime so jobs queued by a
+        # previous process drain immediately instead of waiting for the next
+        # enqueue request.
+        try:
+            get_transcription_service()
+        except Exception as exc:
+            from .logging_db import logger as _lifespan_logger
+
+            _lifespan_logger.warn("Failed to initialize transcription service", {"error": str(exc)})
+        try:
+            await ensure_dbos_launched_async(config_dir=config_dir, meetings_dir=meetings_dir)
+            cancelled_legacy = await cancel_legacy_local_transcription_workflows(
+                config_dir=config_dir,
+                meetings_dir=meetings_dir,
+            )
+            if cancelled_legacy:
+                from .logging_db import logger as _lifespan_logger
+
+                _lifespan_logger.info(
+                    "Cancelled pre-flat-pipeline local transcription workflows",
+                    {"cancelled": cancelled_legacy},
+                )
+        except Exception as exc:
+            from .logging_db import logger as _lifespan_logger
+
+            _lifespan_logger.warn("Failed to start the DBOS runtime", {"error": str(exc)})
         # The Plaud poller must start here — inside the server's running
         # event loop. Starting it during app construction leaves
         # AsyncIOScheduler bound to a loop that never runs, so interval
@@ -501,14 +529,25 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     from .workflows.transcription_workflow import configure_recovery_runtime
 
+    def _progress_sink(meeting_id: str, update: dict[str, Any]) -> None:
+        svc = get_transcription_service()
+        emit = getattr(svc, "emit_progress", None)
+        if callable(emit):
+            emit(meeting_id, update)
+
+    def _complete_sink(meeting_id: str, result: dict[str, Any], wf_id: str | None) -> Any:
+        svc = get_transcription_service()
+        complete = getattr(svc, "complete_local_transcript", None) or getattr(
+            svc, "complete_recovered_local_transcript", None
+        )
+        if callable(complete):
+            return complete(meeting_id, result, wf_id)
+        return None
+
     configure_recovery_runtime(
         db=db,
-        progress_sink=lambda meeting_id, update: get_transcription_service().emit_progress(
-            meeting_id, update
-        ),
-        complete_sink=lambda meeting_id, result, wf_id: (
-            get_transcription_service().complete_recovered_local_transcript(meeting_id, result, wf_id)
-        ),
+        progress_sink=_progress_sink,
+        complete_sink=_complete_sink,
         config_dir=config_dir,
         meetings_dir=meetings_dir,
     )
@@ -1113,6 +1152,50 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     )
                     await queue.put({"event": "progress", "data": json.dumps(upd_dict)})
 
+                async def follow_progress_to_terminal() -> None:
+                    last: dict[str, Any] | None = None
+                    from .workflows import is_shutting_down
+
+                    while not is_shutting_down():
+                        current = _call_sync(
+                            get_transcription_service(),
+                            ("get_transcription_progress", "getTranscriptionProgress"),
+                            meeting_id,
+                        )
+                        upd = (
+                            current.model_dump(exclude_none=True)
+                            if hasattr(current, "model_dump")
+                            else current
+                        )
+                        if isinstance(upd, dict) and upd != last:
+                            last = upd
+                            stage = str(upd.get("stage") or "")
+                            evt = (
+                                "result"
+                                if stage == "done"
+                                else "cancelled"
+                                if stage == "cancelled"
+                                else "error"
+                                if stage == "error"
+                                else "progress"
+                            )
+                            await queue.put({"event": evt, "data": json.dumps(upd)})
+                            if stage in ("done", "cancelled", "error"):
+                                return
+                        await asyncio.sleep(0.5)
+                    await queue.put(
+                        {
+                            "event": "cancelled",
+                            "data": json.dumps(
+                                {
+                                    "stage": "cancelled",
+                                    "percent": 0,
+                                    "message": "Server shutting down.",
+                                }
+                            ),
+                        }
+                    )
+
                 async def run_job() -> None:
                     await queue.put(
                         {
@@ -1146,6 +1229,12 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                         )
                         status = res.get("status") if isinstance(res, dict) else getattr(res, "status", None)
                         err_str = res.get("error") if isinstance(res, dict) else getattr(res, "error", None)
+                        if status == "running":
+                            # Local transcription hands off to durable stage work
+                            # and returns immediately; keep this stream open and
+                            # follow progress instead of reporting "done" early.
+                            await follow_progress_to_terminal()
+                            return
                         if status == "cancelled":
                             await queue.put(
                                 {
