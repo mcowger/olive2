@@ -12,7 +12,7 @@ import time
 import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +48,15 @@ DEFAULT_PAGE_SIZE = 100
 DEFAULT_PCS_WAIT_MS = 5 * 60 * 1000
 DEFAULT_AUDIO_EXTENSION = "m4a"
 PLAUD_PROVIDER = "plaud"
+#: Scheduler job id for the one-shot poll that fires when a pending
+#: recording's PCS wait expires, so audio-only ingest does not have to wait
+#: for the next interval poll.
+PCS_FOLLOWUP_JOB_ID = "plaud_pcs_followup"
+#: Lands the follow-up just after the deadline so ``_fetch_pending_assets``
+#: sees it as expired.
+PCS_FOLLOWUP_SLACK_MS = 2_000
+#: Floor on the follow-up delay so a misbehaving clock can never spin polls.
+PCS_FOLLOWUP_MIN_DELAY_MS = 30_000
 
 
 class DuplicateAudioError(Exception):
@@ -542,6 +551,14 @@ class PlaudPoller:
         pcs_pending = await self._pending_count()
         self._last_poll_at = completed_at
         await self._save_poll_state(completed_at, error)
+        if pcs_pending:
+            try:
+                self._schedule_pcs_followup()
+            except Exception as followup_err:  # never fail the poll over scheduling
+                self.logger.warn(
+                    "Failed to schedule Plaud PCS follow-up poll",
+                    {"category": "plaud", "error": str(followup_err)},
+                )
 
         return {
             "discoveryCompleted": discovery_completed,
@@ -1743,6 +1760,69 @@ class PlaudPoller:
             )
             summary["error"] = str(exc)
             return summary
+
+    def _next_pcs_expiry(self) -> int | None:
+        """Earliest future time (ms) at which a pending recording's PCS wait expires.
+
+        Mirrors the expiry rule in ``_fetch_pending_assets``. Recordings whose
+        wait already expired but are still unresolved (their asset fetch
+        errored) are left to the regular interval poll so a persistent failure
+        cannot drive repeated follow-ups.
+        """
+        with self.db.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        "SELECT first_seen_at, pcs_deadline_at FROM plaud_ingest_state "
+                        "WHERE pcs_resolved = 0 AND duplicate_of_meeting_id IS NULL"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        now = self.now()
+        expiries = [
+            min(int(row["pcs_deadline_at"]), int(row["first_seen_at"]) + self.pcs_wait_ms) for row in rows
+        ]
+        future = [e for e in expiries if e > now]
+        return min(future) if future else None
+
+    def _schedule_pcs_followup(self) -> bool:
+        """Schedule a one-shot poll for when the next pending PCS wait expires.
+
+        Without this, a recording discovered with no Plaud transcript/summary
+        yet is only fetched as audio-only on the *next* interval poll (15 min
+        by default) even though ``pcs_wait_ms`` is 5 min. Returns ``True`` when
+        a follow-up was scheduled.
+        """
+        scheduler = self._scheduler
+        if scheduler is None:
+            return False
+        expiry = self._next_pcs_expiry()
+        if expiry is None:
+            return False
+        delay_ms = max(expiry - self.now() + PCS_FOLLOWUP_SLACK_MS, PCS_FOLLOWUP_MIN_DELAY_MS)
+        run_at = datetime.now(UTC) + timedelta(milliseconds=delay_ms)
+
+        interval_job = scheduler.get_job("plaud_poll")
+        next_interval = getattr(interval_job, "next_run_time", None)
+        if next_interval is not None and next_interval <= run_at:
+            # The regular poll gets there first; no extra Plaud API calls.
+            return False
+
+        scheduler.add_job(
+            self.trigger,
+            "date",
+            run_date=run_at,
+            id=PCS_FOLLOWUP_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        self.logger.debug(
+            "Scheduled Plaud PCS follow-up poll",
+            {"category": "plaud", "delayMs": delay_ms},
+        )
+        return True
 
     async def _pending_count(self) -> int:
         with self.db.connect() as conn:

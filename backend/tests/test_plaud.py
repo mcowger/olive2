@@ -6,8 +6,9 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -284,6 +285,114 @@ async def test_falls_back_to_audio_only_once_pcs_deadline_passes(tmp_path: Path)
         state = conn.execute(text("SELECT * FROM plaud_ingest_state")).mappings().one()
     assert meeting["status"] == "ready"
     assert state["pcs_resolved"] == 1
+    handle.engine.dispose()
+
+
+class _FakeJob:
+    def __init__(self, next_run_time: datetime | None) -> None:
+        self.next_run_time = next_run_time
+
+
+class _FakeScheduler:
+    """Records add_job calls; exposes an optional interval job for get_job."""
+
+    def __init__(self, interval_next_run: datetime | None = None) -> None:
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self._interval = _FakeJob(interval_next_run) if interval_next_run else None
+
+    def get_job(self, job_id: str) -> _FakeJob | None:
+        return self._interval if job_id == "plaud_poll" else None
+
+    def add_job(self, func: Any, trigger: str, **kwargs: Any) -> None:
+        self.jobs[kwargs["id"]] = {"func": func, "trigger": trigger, **kwargs}
+
+
+def _pending_poller(tmp_path: Path, clock: dict[str, int], detail: dict[str, Any]) -> tuple[Any, PlaudPoller]:
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(detail),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: clock["now"],
+            "pcsWaitMs": 300_000,
+        }
+    )
+    return handle, poller
+
+
+async def test_pending_recording_schedules_followup_at_pcs_deadline(tmp_path: Path) -> None:
+    """A recording discovered without Plaud content is re-polled when its PCS
+    wait expires instead of waiting for the next interval poll (#34)."""
+    clock = {"now": 1_000_000}
+    handle, poller = _pending_poller(tmp_path, clock, _pending_detail())
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=15))
+    poller._scheduler = cast(Any, scheduler)
+
+    before = datetime.now(UTC)
+    first = await poller.trigger()
+    assert first["discovered"] == 1
+    assert first["pcsPending"] == 1
+
+    job = scheduler.jobs["plaud_pcs_followup"]
+    assert job["trigger"] == "date"
+    assert job["func"] == poller.trigger
+    delay_s = (job["run_date"] - before).total_seconds()
+    assert 300 <= delay_s <= 310  # PCS wait (5 min) + slack, not the 15-min interval
+
+    # The follow-up poll lands after the deadline and ingests audio-only.
+    clock["now"] += 302_000
+    followup = await poller.trigger()
+    assert followup["resolved"] == 1
+    assert followup["pcsPending"] == 0
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        recordings = conn.execute(text("SELECT * FROM recordings")).mappings().all()
+    assert meeting["status"] == "ready"
+    assert len(recordings) == 1
+    handle.engine.dispose()
+
+
+async def test_no_followup_when_nothing_pending_or_interval_is_sooner(tmp_path: Path) -> None:
+    clock = {"now": 1_000_000}
+
+    # Ready on discovery: resolved in the same pass, nothing to follow up.
+    handle, poller = _pending_poller(tmp_path, clock, _ready_detail())
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=15))
+    poller._scheduler = cast(Any, scheduler)
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    assert scheduler.jobs == {}
+    handle.engine.dispose()
+
+    # Interval poll fires before the PCS deadline: no extra job.
+    handle, poller = _pending_poller(tmp_path / "b", clock, _pending_detail())
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=2))
+    poller._scheduler = cast(Any, scheduler)
+    res = await poller.trigger()
+    assert res["pcsPending"] == 1
+    assert scheduler.jobs == {}
+    handle.engine.dispose()
+
+    # No scheduler (manual-only use): pending is fine, scheduling is a no-op.
+    handle, poller = _pending_poller(tmp_path / "c", clock, _pending_detail())
+    res = await poller.trigger()
+    assert res["pcsPending"] == 1
+    assert poller._schedule_pcs_followup() is False
+    handle.engine.dispose()
+
+
+async def test_followup_skips_expired_but_unresolved_recordings(tmp_path: Path) -> None:
+    """A recording whose fetch keeps failing after its deadline must not
+    drive repeated follow-ups; the interval poll keeps retrying it."""
+    clock = {"now": 1_000_000}
+    handle, poller = _pending_poller(tmp_path, clock, _pending_detail())
+    await poller.trigger()
+    clock["now"] += 600_000  # well past the PCS deadline, still unresolved
+    assert poller._next_pcs_expiry() is None
+    poller._scheduler = cast(Any, _FakeScheduler())
+    assert poller._schedule_pcs_followup() is False
     handle.engine.dispose()
 
 
