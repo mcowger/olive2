@@ -360,7 +360,13 @@ class PlaudPoller:
         except (TypeError, ValueError):
             self.similarity_threshold = None
         self.page_size: int = int(opts.get("pageSize") or DEFAULT_PAGE_SIZE)
-        self.pcs_wait_ms: int = int(opts.get("pcsWaitMs") or DEFAULT_PCS_WAIT_MS)
+        # Constructor override wins (0 is a valid "don't wait"); otherwise the
+        # live ``plaudPcsWaitMinutes`` setting is read each poll.
+        raw_wait = opts.get("pcsWaitMs")
+        self._pcs_wait_override: int | None = max(0, int(raw_wait)) if raw_wait is not None else None
+        self.pcs_wait_ms: int = (
+            self._pcs_wait_override if self._pcs_wait_override is not None else DEFAULT_PCS_WAIT_MS
+        )
         self.retry_options: dict[str, Any] = dict(opts.get("retryOptions") or {})
 
         self._scheduler: AsyncIOScheduler | None = None
@@ -574,6 +580,7 @@ class PlaudPoller:
     async def _discover(self) -> int:
         discovered = 0
         seen: set[str] = set()
+        pcs_wait_ms = self._resolve_pcs_wait_ms()
 
         async for file in self._iterate_plaud_files():
             file_id = str(file["id"])
@@ -658,7 +665,7 @@ class PlaudPoller:
                         "mid": meeting_id,
                         "fid": file_id,
                         "seen": seen_at,
-                        "deadline": seen_at + self.pcs_wait_ms,
+                        "deadline": seen_at + pcs_wait_ms,
                     },
                 )
                 discovered += 1
@@ -709,6 +716,7 @@ class PlaudPoller:
 
         resolved = 0
         errors: list[str] = []
+        pcs_wait_ms = self._resolve_pcs_wait_ms()
 
         for state in states:
             if state.get("duplicate_of_meeting_id"):
@@ -741,7 +749,7 @@ class PlaudPoller:
                 has_content = _content_is_ready(detail)
                 deadline_expired = (
                     self.now() >= int(state["pcs_deadline_at"])
-                    or (self.now() - int(state["first_seen_at"])) >= self.pcs_wait_ms
+                    or (self.now() - int(state["first_seen_at"])) >= pcs_wait_ms
                 )
                 if has_content:
                     await self._ingest_ready_meeting(meeting, state, detail)
@@ -1365,6 +1373,25 @@ class PlaudPoller:
         self.retranscribe_plaud_when_unnamed = when_unnamed
         return always, when_unnamed
 
+    def _resolve_pcs_wait_ms(self) -> int:
+        """How long to wait for Plaud's own transcript/summary before importing audio-only.
+
+        Constructor ``pcsWaitMs`` wins when provided; otherwise the live
+        ``plaudPcsWaitMinutes`` setting (0 = import audio on the discovery
+        poll, for accounts with Plaud transcription turned off), falling back
+        to 5 minutes. Read live so Settings changes apply without a restart.
+        """
+        if self._pcs_wait_override is not None:
+            wait_ms = self._pcs_wait_override
+        else:
+            raw = self._read_settings_json().get("plaudPcsWaitMinutes")
+            try:
+                wait_ms = max(0, int(float(raw) * 60_000)) if raw is not None else DEFAULT_PCS_WAIT_MS
+            except (TypeError, ValueError):
+                wait_ms = DEFAULT_PCS_WAIT_MS
+        self.pcs_wait_ms = wait_ms
+        return wait_ms
+
     async def _get_enrolled_speakers_with_voiceprints(self) -> list[EnrolledSpeaker]:
         """Enrolled speakers that actually carry local voiceprints."""
         with self.db.connect() as conn:
@@ -1781,9 +1808,8 @@ class PlaudPoller:
                 .all()
             )
         now = self.now()
-        expiries = [
-            min(int(row["pcs_deadline_at"]), int(row["first_seen_at"]) + self.pcs_wait_ms) for row in rows
-        ]
+        pcs_wait_ms = self._resolve_pcs_wait_ms()
+        expiries = [min(int(row["pcs_deadline_at"]), int(row["first_seen_at"]) + pcs_wait_ms) for row in rows]
         future = [e for e in expiries if e > now]
         return min(future) if future else None
 
@@ -1792,7 +1818,7 @@ class PlaudPoller:
 
         Without this, a recording discovered with no Plaud transcript/summary
         yet is only fetched as audio-only on the *next* interval poll (15 min
-        by default) even though ``pcs_wait_ms`` is 5 min. Returns ``True`` when
+        by default) even though the PCS wait is 5 min. Returns ``True`` when
         a follow-up was scheduled.
         """
         scheduler = self._scheduler
@@ -1871,7 +1897,7 @@ class PlaudPoller:
                     "UPDATE plaud_ingest_state SET pcs_resolved = 0, "
                     "pcs_deadline_at = :deadline WHERE meeting_id = :mid"
                 ),
-                {"deadline": now + self.pcs_wait_ms, "mid": meeting_id},
+                {"deadline": now + self._resolve_pcs_wait_ms(), "mid": meeting_id},
             )
             conn.execute(
                 text(

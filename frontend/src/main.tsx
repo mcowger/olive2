@@ -5526,6 +5526,7 @@ function LlmSettingsModal({
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse">("local");
   const [plaudRetranscribeMode, setPlaudRetranscribeMode] = useState<"off" | "unnamed" | "always">("off");
+  const [plaudPcsWaitMinutes, setPlaudPcsWaitMinutes] = useState<number>(5);
   const [hfToken, setHfToken] = useState<string>("");
   const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
@@ -5573,6 +5574,9 @@ function LlmSettingsModal({
         }
         if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai" || appCfg.transcriptionProvider === "muse") {
           setTranscriptionProvider(appCfg.transcriptionProvider);
+        }
+        if (typeof appCfg.plaudPcsWaitMinutes === "number") {
+          setPlaudPcsWaitMinutes(appCfg.plaudPcsWaitMinutes);
         }
         if (appCfg.alwaysRetranscribePlaud) {
           setPlaudRetranscribeMode("always");
@@ -5729,6 +5733,7 @@ function LlmSettingsModal({
             transcriptionProvider,
             retranscribePlaudWhenUnnamed: plaudRetranscribeMode === "unnamed",
             alwaysRetranscribePlaud: plaudRetranscribeMode === "always",
+            plaudPcsWaitMinutes,
             hfToken,
             speechmaticsApiKey,
             assemblyaiApiKey,
@@ -5968,6 +5973,27 @@ function LlmSettingsModal({
               />
               <p className="text-[11px] text-base-content/50">
                 Plaud&apos;s transcript is always kept as a fallback. Re-transcribing uses the engine above as authoritative; changes take effect immediately without a restart.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="plaud-pcs-wait-input" className="text-xs text-base-content font-medium">
+                Wait for Plaud transcript (minutes):
+              </label>
+              <input
+                id="plaud-pcs-wait-input"
+                type="number"
+                min={0}
+                max={60}
+                step={1}
+                value={plaudPcsWaitMinutes}
+                onChange={(e) => {
+                  const n = Number.parseInt(e.target.value, 10);
+                  setPlaudPcsWaitMinutes(Number.isFinite(n) ? Math.min(60, Math.max(0, n)) : 0);
+                }}
+                className="input input-md w-28 font-mono"
+              />
+              <p className="text-[11px] text-base-content/50">
+                How long a new Plaud recording waits for Plaud&apos;s own transcript and summary before Olive imports the audio by itself. Set to 0 if Plaud transcription is turned off on your account, so audio is imported on the sync that finds it.
               </p>
             </div>
             <div className="space-y-1.5 pt-1">

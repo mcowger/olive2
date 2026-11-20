@@ -396,6 +396,102 @@ async def test_followup_skips_expired_but_unresolved_recordings(tmp_path: Path) 
     handle.engine.dispose()
 
 
+def _settings_poller(
+    tmp_path: Path, clock: dict[str, int], settings: dict[str, Any]
+) -> tuple[Any, PlaudPoller]:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_pending_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: clock["now"],
+            "configDir": str(config_dir),
+        }
+    )
+    return handle, poller
+
+
+async def test_pcs_wait_zero_setting_ingests_audio_on_discovery_poll(tmp_path: Path) -> None:
+    """With Plaud transcription off there is nothing to wait for:
+    ``plaudPcsWaitMinutes: 0`` imports audio on the poll that finds it."""
+    clock = {"now": 1_000_000}
+    handle, poller = _settings_poller(tmp_path, clock, {"plaudPcsWaitMinutes": 0})
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=15))
+    poller._scheduler = cast(Any, scheduler)
+
+    res = await poller.trigger()
+    assert res["discovered"] == 1
+    assert res["resolved"] == 1
+    assert res["pcsPending"] == 0
+    assert scheduler.jobs == {}
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        recordings = conn.execute(text("SELECT * FROM recordings")).mappings().all()
+    assert meeting["status"] == "ready"
+    assert len(recordings) == 1
+    handle.engine.dispose()
+
+
+async def test_pcs_wait_setting_is_read_live_and_defaults_to_five_minutes(tmp_path: Path) -> None:
+    clock = {"now": 1_000_000}
+    handle, poller = _settings_poller(tmp_path, clock, {})
+    assert poller._resolve_pcs_wait_ms() == 300_000
+
+    settings_path = tmp_path / "config" / "settings.json"
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": 2}), encoding="utf-8")
+    assert poller._resolve_pcs_wait_ms() == 120_000
+
+    # A recording already waiting under the old value is released as soon as
+    # the setting drops to 0, without a restart.
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": 2}), encoding="utf-8")
+    first = await poller.trigger()
+    assert first["pcsPending"] == 1
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": 0}), encoding="utf-8")
+    second = await poller.trigger()
+    assert second["resolved"] == 1
+    assert second["pcsPending"] == 0
+
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": "junk"}), encoding="utf-8")
+    assert poller._resolve_pcs_wait_ms() == 300_000
+    handle.engine.dispose()
+
+
+async def test_constructor_pcs_wait_zero_is_honored(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_pending_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "pcsWaitMs": 0,
+        }
+    )
+    assert poller._resolve_pcs_wait_ms() == 0
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    handle.engine.dispose()
+
+
+def test_app_config_validates_plaud_pcs_wait_minutes() -> None:
+    from olive.settings import AppConfig
+
+    assert AppConfig().plaudPcsWaitMinutes == 5
+    assert AppConfig.model_validate({"plaudPcsWaitMinutes": 0}).plaudPcsWaitMinutes == 0
+    for bad in (-1, 61):
+        try:
+            AppConfig.model_validate({"plaudPcsWaitMinutes": bad})
+        except ValueError:
+            continue
+        raise AssertionError(f"plaudPcsWaitMinutes={bad} should be rejected")
+
+
 async def test_permanently_skips_duplicate_audio_meeting_instead_of_redownloading(
     tmp_path: Path,
 ) -> None:
