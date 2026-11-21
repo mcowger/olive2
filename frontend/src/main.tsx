@@ -5526,7 +5526,12 @@ function LlmSettingsModal({
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse">("local");
   const [plaudRetranscribeMode, setPlaudRetranscribeMode] = useState<"off" | "unnamed" | "always">("off");
-  const [plaudPcsWaitMinutes, setPlaudPcsWaitMinutes] = useState<number>(5);
+  // Kept as text so the field can be emptied while typing; an empty or invalid
+  // value is simply not saved (0 is meaningful: "don't wait").
+  const [plaudPcsWaitMinutes, setPlaudPcsWaitMinutes] = useState<string>("5");
+  const parsedPlaudPcsWaitMinutes = /^\d+$/.test(plaudPcsWaitMinutes.trim())
+    ? Math.min(60, Number.parseInt(plaudPcsWaitMinutes.trim(), 10))
+    : null;
   const [hfToken, setHfToken] = useState<string>("");
   const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
@@ -5576,7 +5581,7 @@ function LlmSettingsModal({
           setTranscriptionProvider(appCfg.transcriptionProvider);
         }
         if (typeof appCfg.plaudPcsWaitMinutes === "number") {
-          setPlaudPcsWaitMinutes(appCfg.plaudPcsWaitMinutes);
+          setPlaudPcsWaitMinutes(String(appCfg.plaudPcsWaitMinutes));
         }
         if (appCfg.alwaysRetranscribePlaud) {
           setPlaudRetranscribeMode("always");
@@ -5733,7 +5738,7 @@ function LlmSettingsModal({
             transcriptionProvider,
             retranscribePlaudWhenUnnamed: plaudRetranscribeMode === "unnamed",
             alwaysRetranscribePlaud: plaudRetranscribeMode === "always",
-            plaudPcsWaitMinutes,
+            ...(parsedPlaudPcsWaitMinutes === null ? {} : { plaudPcsWaitMinutes: parsedPlaudPcsWaitMinutes }),
             hfToken,
             speechmaticsApiKey,
             assemblyaiApiKey,
@@ -5976,19 +5981,22 @@ function LlmSettingsModal({
               </p>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="plaud-pcs-wait-input" className="text-xs text-base-content font-medium">
+              <label htmlFor="plaud-pcs-wait-input" className="block text-xs text-base-content font-medium">
                 Wait for Plaud transcript (minutes):
               </label>
               <input
                 id="plaud-pcs-wait-input"
                 type="number"
+                inputMode="numeric"
                 min={0}
                 max={60}
                 step={1}
                 value={plaudPcsWaitMinutes}
-                onChange={(e) => {
-                  const n = Number.parseInt(e.target.value, 10);
-                  setPlaudPcsWaitMinutes(Number.isFinite(n) ? Math.min(60, Math.max(0, n)) : 0);
+                onChange={(e) => setPlaudPcsWaitMinutes(e.target.value)}
+                onBlur={() => {
+                  if (parsedPlaudPcsWaitMinutes !== null) {
+                    setPlaudPcsWaitMinutes(String(parsedPlaudPcsWaitMinutes));
+                  }
                 }}
                 className="input input-md w-28 font-mono"
               />

@@ -12,11 +12,11 @@ every section newer than the previous tag into the GitHub release notes.
 
 ### Added
 
-- **Setting for how long to wait for Plaud's transcript** — Settings → Transcription → *Wait for Plaud transcript (minutes)*, stored as `plaudPcsWaitMinutes` (default 5, range 0 to 60). If Plaud transcription is turned off on your account, set it to 0 and Olive imports the audio on the same sync that finds the recording, with no wait. Changes take effect without a restart, and recordings that are already waiting are released on the next poll. ([#34](https://github.com/mcowger/olive2/issues/34))
+- **Setting for how long to wait for Plaud's transcript** — a new *Wait for Plaud transcript (minutes)* field under **Plaud recordings** in the AI settings (the **AI:** button in the header), stored as `plaudPcsWaitMinutes` (default 5, range 0 to 60). If Plaud transcription is turned off on your account, set it to 0 and Olive imports the audio on the same sync that finds the recording, with no wait. Changes take effect without a restart, and recordings that are already waiting are released on the next poll. ([#34](https://github.com/mcowger/olive2/issues/34))
 
 ### Fixed
 
-- **Plaud recordings no longer wait a full extra poll for their audio** — when a new recording is discovered before Plaud has its own transcript or summary, Olive waits up to 5 minutes for it and then imports the audio on its own. That check only ran on the next scheduled poll (15 minutes by default), so almost every recording waited about 15 minutes after discovery, including ones picked up by **Sync now**. Olive now runs one extra poll right when that 5-minute wait ends, so the audio arrives about 5 minutes after discovery. The extra poll is skipped when the regular poll would run first. ([#34](https://github.com/mcowger/olive2/issues/34))
+- **Plaud recordings no longer wait a full extra poll for their audio** — when a new recording is discovered before Plaud has its own transcript or summary, Olive waits up to 5 minutes for it and then imports the audio on its own. That check only ran on the next scheduled poll (15 minutes by default), so almost every recording waited about 15 minutes after discovery, including ones picked up by **Sync now**. Olive now queues one extra sync right when that 5-minute wait ends, so the audio arrives about 5 minutes after discovery. It runs on the Plaud sync queue like other background work, so a restart in the meantime doesn't lose it. The extra sync is skipped when the regular poll would run first. ([#34](https://github.com/mcowger/olive2/issues/34))
 
 ## [2026-10-23]
 

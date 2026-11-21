@@ -32,6 +32,7 @@ from olive.plaud import (
     resolve_retry_policy,
     summary_to_markdown,
 )
+from olive.settings import AppConfig, clear_app_config_cache
 
 AUDIO_BYTES = b"fake plaud audio"
 FIXTURE_FILE: dict[str, Any] = {
@@ -337,13 +338,16 @@ async def test_pending_recording_schedules_followup_at_pcs_deadline(tmp_path: Pa
 
     job = scheduler.jobs["plaud_pcs_followup"]
     assert job["trigger"] == "date"
-    assert job["func"] == poller.trigger
+    # The timer only enqueues the durable DBOS follow-up workflow
+    # (see test_plaud_pcs_followup.py); it never runs the sync itself.
+    assert job["func"] == poller._enqueue_pcs_followup
+    assert job["args"] == [1_000_000 + 300_000]
     delay_s = (job["run_date"] - before).total_seconds()
     assert 300 <= delay_s <= 310  # PCS wait (5 min) + slack, not the 15-min interval
 
     # The follow-up poll lands after the deadline and ingests audio-only.
     clock["now"] += 302_000
-    followup = await poller.trigger()
+    followup = await poller.run_pcs_followup_poll()
     assert followup["resolved"] == 1
     assert followup["pcsPending"] == 0
     with handle.engine.connect() as conn:
@@ -479,9 +483,42 @@ async def test_constructor_pcs_wait_zero_is_honored(tmp_path: Path) -> None:
     handle.engine.dispose()
 
 
-def test_app_config_validates_plaud_pcs_wait_minutes() -> None:
-    from olive.settings import AppConfig
+def test_config_route_saves_plaud_pcs_wait_where_the_poller_reads_it(tmp_path: Path) -> None:
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    config_dir = tmp_path / "config"
+    app = create_app(
+        {"db": handle.engine, "configDir": str(config_dir), "meetingsDir": str(tmp_path / "meetings")}
+    )
+    client = TestClient(app)
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "configDir": str(config_dir),
+            "client": _FakePlaudClient(_pending_detail()),
+        }
+    )
 
+    assert client.get("/api/config").json()["plaudPcsWaitMinutes"] == 5
+    assert poller._resolve_pcs_wait_ms() == 300_000
+
+    saved = client.post("/api/config", json={"plaudPcsWaitMinutes": 0})
+    assert saved.status_code == 200
+    assert saved.json()["config"]["plaudPcsWaitMinutes"] == 0
+    assert poller._resolve_pcs_wait_ms() == 0
+
+    # Saving other settings (as the Settings modal does) leaves it alone.
+    assert client.post("/api/config", json={"transcriptionProvider": "local"}).status_code == 200
+    assert poller._resolve_pcs_wait_ms() == 0
+
+    assert client.post("/api/config", json={"plaudPcsWaitMinutes": 61}).status_code == 400
+    assert poller._resolve_pcs_wait_ms() == 0
+    clear_app_config_cache()
+    handle.engine.dispose()
+
+
+def test_app_config_validates_plaud_pcs_wait_minutes() -> None:
     assert AppConfig().plaudPcsWaitMinutes == 5
     assert AppConfig.model_validate({"plaudPcsWaitMinutes": 0}).plaudPcsWaitMinutes == 0
     for bad in (-1, 61):
