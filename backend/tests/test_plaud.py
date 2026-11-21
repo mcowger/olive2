@@ -6,8 +6,9 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -31,6 +32,7 @@ from olive.plaud import (
     resolve_retry_policy,
     summary_to_markdown,
 )
+from olive.settings import AppConfig, clear_app_config_cache
 
 AUDIO_BYTES = b"fake plaud audio"
 FIXTURE_FILE: dict[str, Any] = {
@@ -285,6 +287,246 @@ async def test_falls_back_to_audio_only_once_pcs_deadline_passes(tmp_path: Path)
     assert meeting["status"] == "ready"
     assert state["pcs_resolved"] == 1
     handle.engine.dispose()
+
+
+class _FakeJob:
+    def __init__(self, next_run_time: datetime | None) -> None:
+        self.next_run_time = next_run_time
+
+
+class _FakeScheduler:
+    """Records add_job calls; exposes an optional interval job for get_job."""
+
+    def __init__(self, interval_next_run: datetime | None = None) -> None:
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self._interval = _FakeJob(interval_next_run) if interval_next_run else None
+
+    def get_job(self, job_id: str) -> _FakeJob | None:
+        return self._interval if job_id == "plaud_poll" else None
+
+    def add_job(self, func: Any, trigger: str, **kwargs: Any) -> None:
+        self.jobs[kwargs["id"]] = {"func": func, "trigger": trigger, **kwargs}
+
+
+def _pending_poller(tmp_path: Path, clock: dict[str, int], detail: dict[str, Any]) -> tuple[Any, PlaudPoller]:
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(detail),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: clock["now"],
+            "pcsWaitMs": 300_000,
+        }
+    )
+    return handle, poller
+
+
+async def test_pending_recording_schedules_followup_at_pcs_deadline(tmp_path: Path) -> None:
+    """A recording discovered without Plaud content is re-polled when its PCS
+    wait expires instead of waiting for the next interval poll (#34)."""
+    clock = {"now": 1_000_000}
+    handle, poller = _pending_poller(tmp_path, clock, _pending_detail())
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=15))
+    poller._scheduler = cast(Any, scheduler)
+
+    before = datetime.now(UTC)
+    first = await poller.trigger()
+    assert first["discovered"] == 1
+    assert first["pcsPending"] == 1
+
+    job = scheduler.jobs["plaud_pcs_followup"]
+    assert job["trigger"] == "date"
+    # The timer only enqueues the durable DBOS follow-up workflow
+    # (see test_plaud_pcs_followup.py); it never runs the sync itself.
+    assert job["func"] == poller._enqueue_pcs_followup
+    assert job["args"] == [1_000_000 + 300_000]
+    delay_s = (job["run_date"] - before).total_seconds()
+    assert 300 <= delay_s <= 310  # PCS wait (5 min) + slack, not the 15-min interval
+
+    # The follow-up poll lands after the deadline and ingests audio-only.
+    clock["now"] += 302_000
+    followup = await poller.run_pcs_followup_poll()
+    assert followup["resolved"] == 1
+    assert followup["pcsPending"] == 0
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        recordings = conn.execute(text("SELECT * FROM recordings")).mappings().all()
+    assert meeting["status"] == "ready"
+    assert len(recordings) == 1
+    handle.engine.dispose()
+
+
+async def test_no_followup_when_nothing_pending_or_interval_is_sooner(tmp_path: Path) -> None:
+    clock = {"now": 1_000_000}
+
+    # Ready on discovery: resolved in the same pass, nothing to follow up.
+    handle, poller = _pending_poller(tmp_path, clock, _ready_detail())
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=15))
+    poller._scheduler = cast(Any, scheduler)
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    assert scheduler.jobs == {}
+    handle.engine.dispose()
+
+    # Interval poll fires before the PCS deadline: no extra job.
+    handle, poller = _pending_poller(tmp_path / "b", clock, _pending_detail())
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=2))
+    poller._scheduler = cast(Any, scheduler)
+    res = await poller.trigger()
+    assert res["pcsPending"] == 1
+    assert scheduler.jobs == {}
+    handle.engine.dispose()
+
+    # No scheduler (manual-only use): pending is fine, scheduling is a no-op.
+    handle, poller = _pending_poller(tmp_path / "c", clock, _pending_detail())
+    res = await poller.trigger()
+    assert res["pcsPending"] == 1
+    assert poller._schedule_pcs_followup() is False
+    handle.engine.dispose()
+
+
+async def test_followup_skips_expired_but_unresolved_recordings(tmp_path: Path) -> None:
+    """A recording whose fetch keeps failing after its deadline must not
+    drive repeated follow-ups; the interval poll keeps retrying it."""
+    clock = {"now": 1_000_000}
+    handle, poller = _pending_poller(tmp_path, clock, _pending_detail())
+    await poller.trigger()
+    clock["now"] += 600_000  # well past the PCS deadline, still unresolved
+    assert poller._next_pcs_expiry() is None
+    poller._scheduler = cast(Any, _FakeScheduler())
+    assert poller._schedule_pcs_followup() is False
+    handle.engine.dispose()
+
+
+def _settings_poller(
+    tmp_path: Path, clock: dict[str, int], settings: dict[str, Any]
+) -> tuple[Any, PlaudPoller]:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_pending_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: clock["now"],
+            "configDir": str(config_dir),
+        }
+    )
+    return handle, poller
+
+
+async def test_pcs_wait_zero_setting_ingests_audio_on_discovery_poll(tmp_path: Path) -> None:
+    """With Plaud transcription off there is nothing to wait for:
+    ``plaudPcsWaitMinutes: 0`` imports audio on the poll that finds it."""
+    clock = {"now": 1_000_000}
+    handle, poller = _settings_poller(tmp_path, clock, {"plaudPcsWaitMinutes": 0})
+    scheduler = _FakeScheduler(interval_next_run=datetime.now(UTC) + timedelta(minutes=15))
+    poller._scheduler = cast(Any, scheduler)
+
+    res = await poller.trigger()
+    assert res["discovered"] == 1
+    assert res["resolved"] == 1
+    assert res["pcsPending"] == 0
+    assert scheduler.jobs == {}
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        recordings = conn.execute(text("SELECT * FROM recordings")).mappings().all()
+    assert meeting["status"] == "ready"
+    assert len(recordings) == 1
+    handle.engine.dispose()
+
+
+async def test_pcs_wait_setting_is_read_live_and_defaults_to_five_minutes(tmp_path: Path) -> None:
+    clock = {"now": 1_000_000}
+    handle, poller = _settings_poller(tmp_path, clock, {})
+    assert poller._resolve_pcs_wait_ms() == 300_000
+
+    settings_path = tmp_path / "config" / "settings.json"
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": 2}), encoding="utf-8")
+    assert poller._resolve_pcs_wait_ms() == 120_000
+
+    # A recording already waiting under the old value is released as soon as
+    # the setting drops to 0, without a restart.
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": 2}), encoding="utf-8")
+    first = await poller.trigger()
+    assert first["pcsPending"] == 1
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": 0}), encoding="utf-8")
+    second = await poller.trigger()
+    assert second["resolved"] == 1
+    assert second["pcsPending"] == 0
+
+    settings_path.write_text(json.dumps({"plaudPcsWaitMinutes": "junk"}), encoding="utf-8")
+    assert poller._resolve_pcs_wait_ms() == 300_000
+    handle.engine.dispose()
+
+
+async def test_constructor_pcs_wait_zero_is_honored(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_pending_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "pcsWaitMs": 0,
+        }
+    )
+    assert poller._resolve_pcs_wait_ms() == 0
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    handle.engine.dispose()
+
+
+def test_config_route_saves_plaud_pcs_wait_where_the_poller_reads_it(tmp_path: Path) -> None:
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    config_dir = tmp_path / "config"
+    app = create_app(
+        {"db": handle.engine, "configDir": str(config_dir), "meetingsDir": str(tmp_path / "meetings")}
+    )
+    client = TestClient(app)
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "configDir": str(config_dir),
+            "client": _FakePlaudClient(_pending_detail()),
+        }
+    )
+
+    assert client.get("/api/config").json()["plaudPcsWaitMinutes"] == 5
+    assert poller._resolve_pcs_wait_ms() == 300_000
+
+    saved = client.post("/api/config", json={"plaudPcsWaitMinutes": 0})
+    assert saved.status_code == 200
+    assert saved.json()["config"]["plaudPcsWaitMinutes"] == 0
+    assert poller._resolve_pcs_wait_ms() == 0
+
+    # Saving other settings (as the Settings modal does) leaves it alone.
+    assert client.post("/api/config", json={"transcriptionProvider": "local"}).status_code == 200
+    assert poller._resolve_pcs_wait_ms() == 0
+
+    assert client.post("/api/config", json={"plaudPcsWaitMinutes": 61}).status_code == 400
+    assert poller._resolve_pcs_wait_ms() == 0
+    clear_app_config_cache()
+    handle.engine.dispose()
+
+
+def test_app_config_validates_plaud_pcs_wait_minutes() -> None:
+    assert AppConfig().plaudPcsWaitMinutes == 5
+    assert AppConfig.model_validate({"plaudPcsWaitMinutes": 0}).plaudPcsWaitMinutes == 0
+    for bad in (-1, 61):
+        try:
+            AppConfig.model_validate({"plaudPcsWaitMinutes": bad})
+        except ValueError:
+            continue
+        raise AssertionError(f"plaudPcsWaitMinutes={bad} should be rejected")
 
 
 async def test_permanently_skips_duplicate_audio_meeting_instead_of_redownloading(

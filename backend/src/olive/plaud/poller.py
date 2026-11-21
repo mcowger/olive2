@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import inspect
 import json
@@ -12,7 +13,7 @@ import time
 import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,16 @@ DEFAULT_PAGE_SIZE = 100
 DEFAULT_PCS_WAIT_MS = 5 * 60 * 1000
 DEFAULT_AUDIO_EXTENSION = "m4a"
 PLAUD_PROVIDER = "plaud"
+#: Scheduler job id for the one-shot timer that fires when a pending
+#: recording's PCS wait expires. The timer only enqueues the durable
+#: ``run_plaud_pcs_followup`` DBOS workflow (``workflows/plaud_workflow.py``),
+#: so audio-only ingest does not have to wait for the next interval poll.
+PCS_FOLLOWUP_JOB_ID = "plaud_pcs_followup"
+#: Lands the follow-up just after the deadline so ``_fetch_pending_assets``
+#: sees it as expired.
+PCS_FOLLOWUP_SLACK_MS = 2_000
+#: Floor on the follow-up delay so a misbehaving clock can never spin polls.
+PCS_FOLLOWUP_MIN_DELAY_MS = 30_000
 
 
 class DuplicateAudioError(Exception):
@@ -351,11 +362,19 @@ class PlaudPoller:
         except (TypeError, ValueError):
             self.similarity_threshold = None
         self.page_size: int = int(opts.get("pageSize") or DEFAULT_PAGE_SIZE)
-        self.pcs_wait_ms: int = int(opts.get("pcsWaitMs") or DEFAULT_PCS_WAIT_MS)
+        # Constructor override wins (0 is a valid "don't wait"); otherwise the
+        # live ``plaudPcsWaitMinutes`` setting is read each poll.
+        raw_wait = opts.get("pcsWaitMs")
+        self._pcs_wait_override: int | None = max(0, int(raw_wait)) if raw_wait is not None else None
+        self.pcs_wait_ms: int = (
+            self._pcs_wait_override if self._pcs_wait_override is not None else DEFAULT_PCS_WAIT_MS
+        )
         self.retry_options: dict[str, Any] = dict(opts.get("retryOptions") or {})
 
         self._scheduler: AsyncIOScheduler | None = None
-        self._in_flight: asyncio.Task[dict[str, Any]] | None = None
+        # A Task for interval/manual polls, or a plain Future while a durable
+        # PCS follow-up workflow runs the poll inline (no create_task).
+        self._in_flight: asyncio.Future[dict[str, Any]] | None = None
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connected = False
         self._last_poll_at: int | None = None
@@ -403,6 +422,15 @@ class PlaudPoller:
         except Exception:
             self._scheduler = None
         try:
+            from ..workflows.plaud_workflow import register_plaud_poller
+
+            register_plaud_poller(self)
+        except Exception as exc:
+            self.logger.warn(
+                "Failed to register Plaud poller for PCS follow-ups",
+                {"category": "plaud", "error": str(exc)},
+            )
+        try:
             asyncio.get_running_loop().create_task(self.trigger())
             # Boot backfill: already-ingested Plaud meetings predate speaker
             # identification — queue them so new enrollments also apply.
@@ -411,6 +439,12 @@ class PlaudPoller:
             pass
 
     def stop(self) -> None:
+        try:
+            from ..workflows.plaud_workflow import unregister_plaud_poller
+
+            unregister_plaud_poller(self)
+        except Exception:
+            pass
         if self._scheduler is not None:
             try:
                 self._scheduler.shutdown(wait=False)
@@ -442,9 +476,86 @@ class PlaudPoller:
 
     triggerBackground = trigger_background
 
-    def _clear_in_flight(self, task: asyncio.Task[Any]) -> None:
+    def _clear_in_flight(self, task: asyncio.Future[Any]) -> None:
         if self._in_flight is task:
             self._in_flight = None
+
+    async def run_pcs_followup_poll(self) -> dict[str, Any]:
+        """Run one poll cycle inline for the durable PCS follow-up workflow.
+
+        Called from the ``step_plaud_pcs_followup_poll`` DBOS step. Joins a
+        poll that is already in flight; otherwise runs ``_run_poll`` inline
+        (no ``create_task``) and publishes a Future as the in-flight marker so
+        an interval or manual trigger that lands meanwhile joins this cycle
+        instead of starting a second one.
+
+        Child jobs the poll would queue (transcription hand-off, Plaud
+        speaker identification) are collected and returned under ``handoffs``
+        instead, because DBOS forbids enqueueing from a step; the workflow
+        queues them with :meth:`run_deferred_handoffs`.
+        """
+        if self._in_flight is not None and not self._in_flight.done():
+            # The running cycle hands off its own child jobs.
+            joined = await self._in_flight
+            return {**joined, "handoffs": []}
+
+        handoffs: list[dict[str, str]] = []
+        marker: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._in_flight = marker
+        try:
+            result = await self._run_poll(handoffs)
+        except asyncio.CancelledError:
+            marker.cancel()
+            raise
+        except Exception as exc:
+            # Joined triggers see the same error a failed poll task would give them.
+            marker.set_exception(exc)
+            marker.exception()  # mark retrieved: no "never retrieved" warning without joiners
+            raise
+        else:
+            marker.set_result(result)
+            return {**result, "handoffs": handoffs}
+        finally:
+            self._clear_in_flight(marker)
+
+    async def run_deferred_handoffs(self, handoffs: list[dict[str, str]]) -> int:
+        """Queue the child jobs a follow-up poll deferred, one at a time, in order.
+
+        Runs in the follow-up workflow's context, so each enqueue is a DBOS
+        child of it; awaiting them sequentially (never spawning) keeps a
+        replay's enqueue order identical. Returns how many were queued.
+        """
+        queued = 0
+        for item in handoffs:
+            meeting_id = str(item.get("meetingId") or "")
+            if not meeting_id:
+                continue
+            kind = item.get("kind")
+            if kind == "transcribe":
+                if await self._start_transcription_now(
+                    meeting_id, str(item.get("context") or "Plaud meeting")
+                ):
+                    queued += 1
+            elif kind == "identify":
+                if await self._enqueue_plaud_speaker_identification(meeting_id):
+                    queued += 1
+        return queued
+
+    async def _start_transcription_now(self, meeting_id: str, context: str) -> bool:
+        fn = self._transcription_starter()
+        if fn is None:
+            return False
+        try:
+            res = fn(meeting_id)
+            if inspect.isawaitable(res):
+                await res
+            return True
+        except Exception as exc:
+            self.logger.warn(
+                f"Automatic transcription failed for {context}",
+                {"meetingId": meeting_id, "error": str(exc)},
+            )
+            return False
 
     def _spawn_background(self, coro: Any) -> None:
         task = asyncio.create_task(coro)
@@ -502,7 +613,13 @@ class PlaudPoller:
             self._connected = False
             return False
 
-    async def _run_poll(self) -> dict[str, Any]:
+    async def _run_poll(self, deferred_handoffs: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        """Run one poll cycle.
+
+        ``deferred_handoffs`` is only passed by the durable PCS follow-up
+        (:meth:`run_pcs_followup_poll`): child jobs are appended to it instead
+        of being queued inline. Interval and manual polls leave it ``None``.
+        """
         started_at = self.now()
         self.logger.debug("Starting Plaud polling cycle", {"category": "plaud"})
         discovery_completed = False
@@ -520,7 +637,7 @@ class PlaudPoller:
             self._connected = True
             discovered = await self._discover()
             discovery_completed = True
-            resolution_res = await self._fetch_pending_assets()
+            resolution_res = await self._fetch_pending_assets(deferred_handoffs)
             resolved = resolution_res["resolved"]
             error = resolution_res["error"]
             self.logger.debug(
@@ -542,6 +659,14 @@ class PlaudPoller:
         pcs_pending = await self._pending_count()
         self._last_poll_at = completed_at
         await self._save_poll_state(completed_at, error)
+        if pcs_pending:
+            try:
+                self._schedule_pcs_followup()
+            except Exception as followup_err:  # never fail the poll over scheduling
+                self.logger.warn(
+                    "Failed to schedule Plaud PCS follow-up poll",
+                    {"category": "plaud", "error": str(followup_err)},
+                )
 
         return {
             "discoveryCompleted": discovery_completed,
@@ -557,6 +682,7 @@ class PlaudPoller:
     async def _discover(self) -> int:
         discovered = 0
         seen: set[str] = set()
+        pcs_wait_ms = self._resolve_pcs_wait_ms()
 
         async for file in self._iterate_plaud_files():
             file_id = str(file["id"])
@@ -641,7 +767,7 @@ class PlaudPoller:
                         "mid": meeting_id,
                         "fid": file_id,
                         "seen": seen_at,
-                        "deadline": seen_at + self.pcs_wait_ms,
+                        "deadline": seen_at + pcs_wait_ms,
                     },
                 )
                 discovered += 1
@@ -684,7 +810,9 @@ class PlaudPoller:
                 else:
                     await asyncio.sleep(max(0.0, delay_ms / 1000.0))
 
-    async def _fetch_pending_assets(self) -> dict[str, Any]:
+    async def _fetch_pending_assets(
+        self, deferred_handoffs: list[dict[str, str]] | None = None
+    ) -> dict[str, Any]:
         with self.db.connect() as conn:
             states = (
                 conn.execute(text("SELECT * FROM plaud_ingest_state WHERE pcs_resolved = 0")).mappings().all()
@@ -692,6 +820,7 @@ class PlaudPoller:
 
         resolved = 0
         errors: list[str] = []
+        pcs_wait_ms = self._resolve_pcs_wait_ms()
 
         for state in states:
             if state.get("duplicate_of_meeting_id"):
@@ -724,13 +853,13 @@ class PlaudPoller:
                 has_content = _content_is_ready(detail)
                 deadline_expired = (
                     self.now() >= int(state["pcs_deadline_at"])
-                    or (self.now() - int(state["first_seen_at"])) >= self.pcs_wait_ms
+                    or (self.now() - int(state["first_seen_at"])) >= pcs_wait_ms
                 )
                 if has_content:
-                    await self._ingest_ready_meeting(meeting, state, detail)
+                    await self._ingest_ready_meeting(meeting, state, detail, deferred_handoffs)
                     resolved += 1
                 elif deadline_expired:
-                    await self._ingest_audio_only_meeting(meeting, state, detail)
+                    await self._ingest_audio_only_meeting(meeting, state, detail, deferred_handoffs)
                     resolved += 1
             except DuplicateAudioError as dup_err:
                 await self._mark_duplicate(meeting, state, dup_err.duplicate_of_meeting_id)
@@ -810,42 +939,42 @@ class PlaudPoller:
             },
         )
 
-    def _hand_off_transcription(self, meeting_id: str, context: str) -> None:
-        """Queue automatic transcription without blocking the poll cycle."""
-        if not self.transcription_service:
-            return
+    def _transcription_starter(self) -> Callable[[str], Any] | None:
         # Durable work must go through the DBOS job queue (see AGENTS.md):
-        # prefer the queue-enqueueing start_transcription entry point. The
-        # spawned coroutine below is only scheduling glue that awaits the
-        # enqueue — the transcription itself runs as a durable queue job.
+        # prefer the queue-enqueueing start_transcription entry point.
         # transcribe_meeting is kept as a fallback for duck-typed doubles.
+        if not self.transcription_service:
+            return None
         fn = (
             getattr(self.transcription_service, "start_transcription", None)
             or getattr(self.transcription_service, "startTranscription", None)
             or getattr(self.transcription_service, "transcribe_meeting", None)
             or getattr(self.transcription_service, "transcribeMeeting", None)
         )
-        if not callable(fn):
+        return fn if callable(fn) else None
+
+    def _hand_off_transcription(
+        self,
+        meeting_id: str,
+        context: str,
+        deferred_handoffs: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Queue automatic transcription without blocking the poll cycle."""
+        if self._transcription_starter() is None:
             return
-
-        async def _run() -> None:
-            try:
-                res = fn(meeting_id)
-                if inspect.isawaitable(res):
-                    await res
-            except Exception as exc:
-                self.logger.warn(
-                    f"Automatic transcription failed for {context}",
-                    {"meetingId": meeting_id, "error": str(exc)},
-                )
-
-        self._spawn_background(_run())
+        if deferred_handoffs is not None:
+            deferred_handoffs.append({"kind": "transcribe", "meetingId": meeting_id, "context": context})
+            return
+        # The spawned coroutine is only scheduling glue that awaits the enqueue —
+        # the transcription itself runs as a durable queue job.
+        self._spawn_background(self._start_transcription_now(meeting_id, context))
 
     async def _ingest_ready_meeting(
         self,
         meeting: Mapping[Any, Any],
         state: Mapping[Any, Any],
         detail: Mapping[Any, Any],
+        deferred_handoffs: list[dict[str, str]] | None = None,
     ) -> None:
         recording = await self._ensure_recording(meeting, state, detail)
         segments = parse_transcript_segments(detail.get("source_list"))
@@ -924,7 +1053,7 @@ class PlaudPoller:
         # as authoritative, regardless of either flag.
         should_retranscribe = always or (when_unnamed and has_only_generic) or not segments
         if should_retranscribe:
-            self._hand_off_transcription(meeting["id"], "Plaud meeting")
+            self._hand_off_transcription(meeting["id"], "Plaud meeting", deferred_handoffs)
 
         if segments and not (always and self.transcription_service):
             # Skipped when always-re-transcribe fires: the replacement
@@ -935,13 +1064,17 @@ class PlaudPoller:
             # ASR-first speaker identification runs as a durable plaud_sync
             # queue job (never inline: embedding would block the poll cycle).
             # Failures keep the Plaud labels persisted above.
-            await self._enqueue_plaud_speaker_identification(meeting["id"])
+            if deferred_handoffs is not None:
+                deferred_handoffs.append({"kind": "identify", "meetingId": meeting["id"]})
+            else:
+                await self._enqueue_plaud_speaker_identification(meeting["id"])
 
     async def _ingest_audio_only_meeting(
         self,
         meeting: Mapping[Any, Any],
         state: Mapping[Any, Any],
         detail: Mapping[Any, Any],
+        deferred_handoffs: list[dict[str, str]] | None = None,
     ) -> None:
         await self._ensure_recording(meeting, state, detail)
         resolved_at = self.now()
@@ -958,7 +1091,7 @@ class PlaudPoller:
                 {"id": meeting["id"]},
             )
 
-        self._hand_off_transcription(meeting["id"], "audio-only Plaud meeting")
+        self._hand_off_transcription(meeting["id"], "audio-only Plaud meeting", deferred_handoffs)
 
     async def _ensure_recording(
         self,
@@ -1347,6 +1480,25 @@ class PlaudPoller:
         self.auto_transcribe_with_speechmatics = always
         self.retranscribe_plaud_when_unnamed = when_unnamed
         return always, when_unnamed
+
+    def _resolve_pcs_wait_ms(self) -> int:
+        """How long to wait for Plaud's own transcript/summary before importing audio-only.
+
+        Constructor ``pcsWaitMs`` wins when provided; otherwise the live
+        ``plaudPcsWaitMinutes`` setting (0 = import audio on the discovery
+        poll, for accounts with Plaud transcription turned off), falling back
+        to 5 minutes. Read live so Settings changes apply without a restart.
+        """
+        if self._pcs_wait_override is not None:
+            wait_ms = self._pcs_wait_override
+        else:
+            raw = self._read_settings_json().get("plaudPcsWaitMinutes")
+            try:
+                wait_ms = max(0, int(float(raw) * 60_000)) if raw is not None else DEFAULT_PCS_WAIT_MS
+            except (TypeError, ValueError):
+                wait_ms = DEFAULT_PCS_WAIT_MS
+        self.pcs_wait_ms = wait_ms
+        return wait_ms
 
     async def _get_enrolled_speakers_with_voiceprints(self) -> list[EnrolledSpeaker]:
         """Enrolled speakers that actually carry local voiceprints."""
@@ -1744,6 +1896,115 @@ class PlaudPoller:
             summary["error"] = str(exc)
             return summary
 
+    def _next_pcs_expiry(self) -> int | None:
+        """Earliest future time (ms) at which a pending recording's PCS wait expires.
+
+        Mirrors the expiry rule in ``_fetch_pending_assets``. Recordings whose
+        wait already expired but are still unresolved (their asset fetch
+        errored) are left to the regular interval poll so a persistent failure
+        cannot drive repeated follow-ups.
+        """
+        with self.db.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        "SELECT first_seen_at, pcs_deadline_at FROM plaud_ingest_state "
+                        "WHERE pcs_resolved = 0 AND duplicate_of_meeting_id IS NULL"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        now = self.now()
+        pcs_wait_ms = self._resolve_pcs_wait_ms()
+        expiries = [min(int(row["pcs_deadline_at"]), int(row["first_seen_at"]) + pcs_wait_ms) for row in rows]
+        future = [e for e in expiries if e > now]
+        return min(future) if future else None
+
+    def _schedule_pcs_followup(self) -> bool:
+        """Arm a one-shot timer for when the next pending PCS wait expires.
+
+        Without this, a recording discovered with no Plaud transcript/summary
+        yet is only fetched as audio-only on the *next* interval poll (15 min
+        by default) even though the PCS wait is 5 min. The timer is scheduling
+        glue only: it enqueues the durable follow-up workflow (see
+        :meth:`_enqueue_pcs_followup`). Returns ``True`` when armed.
+        """
+        scheduler = self._scheduler
+        if scheduler is None:
+            return False
+        expiry = self._next_pcs_expiry()
+        if expiry is None:
+            return False
+        delay_ms = max(expiry - self.now() + PCS_FOLLOWUP_SLACK_MS, PCS_FOLLOWUP_MIN_DELAY_MS)
+        run_at = datetime.now(UTC) + timedelta(milliseconds=delay_ms)
+
+        interval_job = scheduler.get_job("plaud_poll")
+        next_interval = getattr(interval_job, "next_run_time", None)
+        if next_interval is not None and next_interval <= run_at:
+            # The regular poll gets there first; no extra Plaud API calls.
+            return False
+
+        # This runs at the end of every poll, including the follow-up poll that
+        # executes inside a DBOS step. asyncio timers capture the context they
+        # are created in, and AsyncIOScheduler re-arms its wakeup timer from
+        # add_job, so adding the job in the caller's context would make every
+        # later scheduler job (interval polls included) run inside a stale copy
+        # of that step's DBOS context. An empty context keeps the scheduler's
+        # timer chain clean.
+        contextvars.Context().run(
+            scheduler.add_job,
+            self._enqueue_pcs_followup,
+            "date",
+            run_date=run_at,
+            args=[expiry],
+            id=PCS_FOLLOWUP_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        self.logger.debug(
+            "Scheduled Plaud PCS follow-up poll",
+            {"category": "plaud", "delayMs": delay_ms},
+        )
+        return True
+
+    async def _enqueue_pcs_followup(self, expiry_ms: int) -> str | None:
+        """Timer callback: enqueue the deduplicated follow-up on ``plaud_sync``.
+
+        The sync itself runs as the named DBOS workflow
+        ``run_plaud_pcs_followup`` with persisted inputs, so it survives a
+        restart. If DBOS is unavailable the deadline is left to the interval
+        poll; nothing runs outside the queue.
+        """
+        try:
+            from ..workflows import enqueue_plaud_pcs_followup, ensure_dbos_launched_async
+
+            await ensure_dbos_launched_async(
+                config_dir=self.config_dir or None,
+                meetings_dir=self.meetings_dir or None,
+            )
+            workflow_id = await enqueue_plaud_pcs_followup(int(expiry_ms))
+        except Exception as exc:
+            self.logger.warn(
+                "Failed to enqueue Plaud PCS follow-up; the interval poll will pick it up",
+                {"category": "plaud", "error": str(exc)},
+            )
+            return None
+        if workflow_id is None:
+            # Deduplicated: a follow-up is already queued or running. A queued
+            # one polls after this deadline and covers it; otherwise the
+            # interval poll does.
+            self.logger.debug(
+                "Plaud PCS follow-up already queued",
+                {"category": "plaud", "expiryMs": int(expiry_ms)},
+            )
+            return None
+        self.logger.debug(
+            "Enqueued Plaud PCS follow-up workflow",
+            {"category": "plaud", "workflowId": workflow_id},
+        )
+        return workflow_id
+
     async def _pending_count(self) -> int:
         with self.db.connect() as conn:
             cnt = conn.execute(
@@ -1791,7 +2052,7 @@ class PlaudPoller:
                     "UPDATE plaud_ingest_state SET pcs_resolved = 0, "
                     "pcs_deadline_at = :deadline WHERE meeting_id = :mid"
                 ),
-                {"deadline": now + self.pcs_wait_ms, "mid": meeting_id},
+                {"deadline": now + self._resolve_pcs_wait_ms(), "mid": meeting_id},
             )
             conn.execute(
                 text(

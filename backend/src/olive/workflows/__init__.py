@@ -1,5 +1,14 @@
 """DBOS SQLite-backed workflow runtime and stage queues for Olive."""
 
+from .plaud_workflow import (
+    PCS_FOLLOWUP_DEDUP_ID,
+    enqueue_plaud_pcs_followup,
+    pcs_followup_workflow_id,
+    register_plaud_poller,
+    run_plaud_pcs_followup,
+    step_plaud_pcs_followup_poll,
+    unregister_plaud_poller,
+)
 from .queues import (
     QUEUE_ALIGN,
     QUEUE_ASR,
@@ -64,6 +73,7 @@ from .transcription_workflow import (
 )
 
 __all__ = [
+    "PCS_FOLLOWUP_DEDUP_ID",
     "QUEUE_ALIGN",
     "QUEUE_ASSEMBLYAI",
     "QUEUE_ASR",
@@ -91,6 +101,7 @@ __all__ = [
     "configure_recovery_runtime",
     "enqueue_driver_job",
     "enqueue_local_transcription",
+    "enqueue_plaud_pcs_followup",
     "enqueue_stage_job",
     "ensure_dbos_launched_async",
     "ensure_dbos_launched_sync",
@@ -104,11 +115,14 @@ __all__ = [
     "local_run_workflow_prefix",
     "local_stage_workflow_id",
     "mark_shutting_down",
+    "pcs_followup_workflow_id",
+    "register_plaud_poller",
     "register_task_context",
     "reset_shutdown_flag",
     "resolve_dbos_database_url",
     "resolve_max_executor_threads",
     "run_local_stage",
+    "run_plaud_pcs_followup",
     "run_registered_job_workflow",
     "shutdown_dbos",
     "step_align_and_finalize",
@@ -117,7 +131,9 @@ __all__ = [
     "step_diarize_turns",
     "step_embed_and_match_speakers",
     "step_enhance_audio_file",
+    "step_plaud_pcs_followup_poll",
     "step_run_registered_job",
     "step_transcribe_asr",
+    "unregister_plaud_poller",
     "unregister_task_context",
 ]
