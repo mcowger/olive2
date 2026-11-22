@@ -162,6 +162,29 @@ def test_refresh_helper_pushes_effective_keys() -> None:
     assert sm.api_key == SM_KEY
 
 
+def test_assemblyai_speech_model_config_round_trip(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OLIVE_CONFIG_DIR", str(tmp_path / "unrelated"))
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    app = create_app({"db": handle.engine, "configDir": str(tmp_path / "settings")})
+    client = TestClient(app)
+
+    assert client.get("/api/config").json()["assemblyaiSpeechModel"] == "universal-3-5-pro"
+    saved = client.post("/api/config", json={"assemblyaiSpeechModel": "assemblyai-stt-3-7"})
+    assert saved.status_code == 200
+    assert saved.json()["config"]["assemblyaiSpeechModel"] == "assemblyai-stt-3-7"
+    clear_app_config_cache()
+    assert client.get("/api/config").json()["assemblyaiSpeechModel"] == "assemblyai-stt-3-7"
+
+    invalid = client.post("/api/config", json={"assemblyaiSpeechModel": "not-a-model"})
+    assert invalid.status_code == 400
+    assert client.get("/api/config").json()["assemblyaiSpeechModel"] == "assemblyai-stt-3-7"
+    assert client.post("/api/config", json={"assemblyaiSpeechModel": "universal-3-5-pro"}).status_code == 200
+    assert client.get("/api/config").json()["assemblyaiSpeechModel"] == "universal-3-5-pro"
+    handle.engine.dispose()
+    clear_app_config_cache()
+
+
 def test_config_routes_round_trip_keys_masked(tmp_path, monkeypatch) -> None:
     for var in (
         "SPEECHMATICS_API_KEY",

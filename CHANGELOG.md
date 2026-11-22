@@ -8,6 +8,12 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-11-22]
+
+### Added
+
+- Choose AssemblyAI-STT-3.7 or Universal-3.5 Pro for AssemblyAI transcription in AI settings. Existing installations continue using Universal-3.5 Pro by default.
+
 ## [2026-11-20]
 
 ### Added
