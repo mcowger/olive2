@@ -122,6 +122,9 @@ class AppConfig(BaseModel):
     hfToken: str = Field(default="")
     speechmaticsApiKey: str = Field(default="")
     assemblyaiApiKey: str = Field(default="")
+    assemblyaiSpeechModel: Literal["universal-3-5-pro", "assemblyai-stt-3-7"] = Field(
+        default="universal-3-5-pro"
+    )
     museApiKey: str = Field(default="")
 
     @field_validator("localAsrModel", mode="before")

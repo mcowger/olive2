@@ -111,6 +111,19 @@ async def test_config_uses_language_detection_when_no_language() -> None:
     assert "language_code" not in config
 
 
+async def test_selected_model_reaches_transcribe_fallback() -> None:
+    client, fake = _client()
+    await client.submit_job({"audio": b"x", "speechModel": "assemblyai-stt-3-7"})
+    assert fake.calls[0][1]["speech_models"] == ["assemblyai-stt-3-7"]
+
+
+def test_sdk_accepts_stt_37_model_string() -> None:
+    from assemblyai import TranscriptionConfig
+
+    config = TranscriptionConfig(speech_models=["assemblyai-stt-3-7"])
+    assert config.speech_models == ["assemblyai-stt-3-7"]
+
+
 async def test_keyterms_accept_strings_and_content_dicts() -> None:
     client, fake = _client()
     await client.submit_and_transcribe(

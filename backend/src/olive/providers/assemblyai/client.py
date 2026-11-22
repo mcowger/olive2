@@ -116,7 +116,7 @@ def _keyterms(raw: Any) -> list[str]:
 
 def _build_config(options: dict[str, Any]) -> dict[str, Any]:
     config: dict[str, Any] = {
-        "speech_models": list(SPEECH_MODELS),
+        "speech_models": [options.get("speechModel") or SPEECH_MODELS[0]],
         "speaker_labels": True,
         "punctuate": True,
         "format_text": True,

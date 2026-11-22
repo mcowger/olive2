@@ -225,7 +225,7 @@ Olive stores runtime settings in `<configDir>/settings.json` and accepts environ
 | `OLIVE_MCP_WRITE` | `0` | Set to `1` to enable MCP write tools (speakers, tags incl. bulk, titles, meeting lifecycle, transcription, summaries); off by default |
 | `PLAUD_TOKEN_PATH` | `<configDir>/plaud-tokens.json` | OAuth token file for Plaud Cloud (migrates `~/.plaud/tokens.json` automatically if present) |
 | `SPEECHMATICS_API_KEY` | *(optional)* | API key for Speechmatics cloud batch transcription (overrides the key in Settings UI) |
-| `ASSEMBLY_API_KEY` | *(optional)* | API key for AssemblyAI cloud transcription (Universal-3.5 Pro; `ASSEMBLYAI_API_KEY` also accepted; overrides the key in Settings UI) |
+| `ASSEMBLY_API_KEY` | *(optional)* | API key for AssemblyAI cloud transcription (`ASSEMBLYAI_API_KEY` also accepted; overrides the key in Settings UI). Choose Universal-3.5 Pro or AssemblyAI-STT-3.7 in AI settings; Universal-3.5 Pro is the default. |
 | `MUSE_API_KEY` | *(optional)* | API key for Muse Voice transcription (`MODEL_API_KEY` also accepted; overrides the key in Settings UI) |
 | `SPEECHMATICS_WEBHOOK_SECRET` | *(optional)* | Shared secret for `POST /api/webhooks/speechmatics` |
 

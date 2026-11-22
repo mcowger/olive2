@@ -5535,6 +5535,7 @@ function LlmSettingsModal({
   const [hfToken, setHfToken] = useState<string>("");
   const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
+  const [assemblyaiSpeechModel, setAssemblyaiSpeechModel] = useState<"universal-3-5-pro" | "assemblyai-stt-3-7">("universal-3-5-pro");
   const [museApiKey, setMuseApiKey] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -5598,6 +5599,9 @@ function LlmSettingsModal({
         }
         if (typeof appCfg.assemblyaiApiKey === "string") {
           setAssemblyaiApiKey(appCfg.assemblyaiApiKey);
+        }
+        if (appCfg.assemblyaiSpeechModel === "universal-3-5-pro" || appCfg.assemblyaiSpeechModel === "assemblyai-stt-3-7") {
+          setAssemblyaiSpeechModel(appCfg.assemblyaiSpeechModel);
         }
         if (typeof appCfg.museApiKey === "string") {
           setMuseApiKey(appCfg.museApiKey);
@@ -5742,6 +5746,7 @@ function LlmSettingsModal({
             hfToken,
             speechmaticsApiKey,
             assemblyaiApiKey,
+            assemblyaiSpeechModel,
             museApiKey
           })
         })
@@ -6033,6 +6038,24 @@ function LlmSettingsModal({
                 autoComplete="off"
                 className="input input-md w-full placeholder-base-content/50 font-mono"
               />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="assemblyai-model-select" className="block text-xs text-base-content font-medium">
+                AssemblyAI Speech Model:
+              </label>
+              <select
+                id="assemblyai-model-select"
+                aria-describedby="assemblyai-model-language-hint"
+                value={assemblyaiSpeechModel}
+                onChange={(e) => setAssemblyaiSpeechModel(e.target.value as "universal-3-5-pro" | "assemblyai-stt-3-7")}
+                className="select select-md w-full"
+              >
+                <option value="universal-3-5-pro">Universal-3.5 Pro</option>
+                <option value="assemblyai-stt-3-7">AssemblyAI-STT-3.7</option>
+              </select>
+              <p id="assemblyai-model-language-hint" className="text-xs text-base-content/60">
+                With automatic language detection, AssemblyAI-STT-3.7 supports 32 languages and does not fall back to Universal-2 for other languages.
+              </p>
             </div>
             <div className="space-y-1.5">
               <label htmlFor="muse-key-input" className="text-xs text-base-content font-medium flex items-center justify-between">

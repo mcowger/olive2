@@ -15,6 +15,7 @@ from olive.ml.protocols import DiscoveredSpeakerVoiceprint
 from olive.providers.assemblyai import AssemblyAIClient
 from olive.schemas import EnrolledSpeaker, Transcript, TranscriptSegment, TranscriptWord
 from olive.services.transcription import STAGE_ASSEMBLYAI_TRANSCRIBE, TranscriptionService
+from olive.settings import clear_app_config_cache, resolve_paths, save_app_config
 
 RAW_TRANSCRIPT: dict[str, Any] = {
     "id": "aai-job-123",
@@ -51,8 +52,10 @@ RAW_TRANSCRIPT: dict[str, Any] = {
 class _FakeTranscriber:
     def __init__(self) -> None:
         self.polls = 0
+        self.configs: list[dict[str, Any]] = []
 
-    async def submit(self, _audio: Any, _config: dict[str, Any]) -> dict[str, Any]:
+    async def submit(self, _audio: Any, config: dict[str, Any]) -> dict[str, Any]:
+        self.configs.append(config)
         return {"id": "aai-job-123", "status": "queued"}
 
     async def get_transcript(self, _job_id: str) -> dict[str, Any]:
@@ -100,11 +103,48 @@ def _service(handle: Any, meetings_dir: str, **extra: Any) -> TranscriptionServi
         {
             "db": handle.engine,
             "meetingsDir": meetings_dir,
+            "configDir": str(Path(meetings_dir).parent / "config"),
             "assemblyaiClient": client,
             "now": lambda: 1_700_000_001_000,
             **extra,
         }
     )
+
+
+async def test_model_selection_follows_persisted_settings_without_restart(tmp_path: Path) -> None:
+    handle, meeting_id, _ = _seed_meeting(tmp_path)
+    service = _service(handle, str(tmp_path / "meetings"))
+    fake = service.assemblyai_client.raw_client
+    paths = resolve_paths({"OLIVE_CONFIG_DIR": str(tmp_path / "config")})
+    messages: list[str] = []
+    options = {
+        "provider": "assemblyai",
+        "pollIntervalMs": 10,
+        "force": True,
+        "onProgress": lambda update: messages.append(update.message),
+    }
+
+    result = await service.transcribe_meeting(meeting_id, options)
+    assert result["status"] == "done"
+    assert fake.configs[-1]["speech_models"] == ["universal-3-5-pro"]
+    assert "Universal-3.5 Pro" in messages[0]
+
+    save_app_config({"assemblyaiSpeechModel": "assemblyai-stt-3-7"}, paths)
+    messages.clear()
+    result = await service.transcribe_meeting(meeting_id, options)
+    assert result["status"] == "done"
+    assert fake.configs[-1]["speech_models"] == ["assemblyai-stt-3-7"]
+    assert "AssemblyAI STT 3.7" in messages[0]
+
+    clear_app_config_cache()
+    restarted = _service(handle, str(tmp_path / "meetings"))
+    messages.clear()
+    result = await restarted.transcribe_meeting(meeting_id, options)
+    assert result["status"] == "done"
+    assert restarted.assemblyai_client.raw_client.configs[-1]["speech_models"] == ["assemblyai-stt-3-7"]
+    assert "AssemblyAI STT 3.7" in messages[0]
+    handle.engine.dispose()
+    clear_app_config_cache()
 
 
 async def test_assemblyai_polling_flow_persists_artifacts_and_cloud_labels(tmp_path: Path) -> None:

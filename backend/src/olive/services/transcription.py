@@ -46,6 +46,7 @@ from ..schemas import (
     TranscriptionProgressUpdate,
     TranscriptSegment,
 )
+from ..settings import load_app_config, resolve_paths
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
@@ -2679,13 +2680,16 @@ class TranscriptionService:
 
         stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
         current_time = self.now()
+        config_paths = resolve_paths({"OLIVE_CONFIG_DIR": self.config_dir}) if self.config_dir else resolve_paths()
+        speech_model = load_app_config(config_paths).assemblyaiSpeechModel
+        model_label = "AssemblyAI STT 3.7" if speech_model == "assemblyai-stt-3-7" else "Universal-3.5 Pro"
 
         if callable(on_progress):
             r = on_progress(
                 TranscriptionProgressUpdate(
                     stage="uploading",
                     percent=15,
-                    message="Uploading audio to AssemblyAI (Universal-3.5 Pro)...",
+                    message=f"Uploading audio to AssemblyAI ({model_label})...",
                 )
             )
             if inspect.isawaitable(r):
@@ -2759,6 +2763,7 @@ class TranscriptionService:
                 {
                     "audio": {"path": audio_full_path},
                     "filename": Path(recording["path"]).name,
+                    "speechModel": speech_model,
                     "language": opts.get("language"),
                     "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
                 }
